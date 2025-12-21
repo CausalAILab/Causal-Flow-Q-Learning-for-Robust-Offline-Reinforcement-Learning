@@ -5,26 +5,19 @@ import json
 import random
 import time
 
-import jax
 import numpy as np
 import tqdm
 import wandb
 from absl import app, flags
 from ml_collections import config_flags
 
-from agents import agents
-from envs.env_utils import make_env_and_datasets
-from utils.datasets import Dataset, ReplayBuffer
-from utils.evaluation import evaluate, flatten
-from utils.flax_utils import restore_agent, save_agent
-from utils.log_utils import CsvLogger, get_exp_name, get_flag_dict, get_wandb_video, setup_wandb
-
 FLAGS = flags.FLAGS
 
 flags.DEFINE_string('run_group', 'Debug', 'Run group.')
 flags.DEFINE_integer('seed', 0, 'Random seed.')
+flags.DEFINE_string('device_id', '7', 'CUDA device ID.')
 flags.DEFINE_string('env_name', 'cube-double-play-singletask-v0', 'Environment (dataset) name.')
-flags.DEFINE_string('save_dir', 'exp/', 'Save directory.')
+flags.DEFINE_string('save_dir', '/home/ml/explogs/fql', 'Save directory.')
 flags.DEFINE_string('restore_path', None, 'Restore path.')
 flags.DEFINE_integer('restore_epoch', None, 'Restore epoch.')
 
@@ -47,6 +40,18 @@ config_flags.DEFINE_config_file('agent', 'agents/fql.py', lock_config=False)
 
 
 def main(_):
+    # Set visible devices before importing jax and all our modules built upon it.
+    os.environ["CUDA_VISIBLE_DEVICES"] = FLAGS.device_id
+    os.environ["MUJOCO_EGL_DEVICE_ID"] = FLAGS.device_id
+    os.environ['MUJOCO_GL'] = 'egl'
+    import jax
+    from agents import agents
+    from envs.env_utils import make_env_and_datasets
+    from utils.datasets import Dataset, ReplayBuffer
+    from utils.evaluation import evaluate, flatten
+    from utils.flax_utils import restore_agent, save_agent
+    from utils.log_utils import CsvLogger, get_exp_name, get_flag_dict, get_wandb_video, setup_wandb
+    
     # Set up logger.
     exp_name = get_exp_name(FLAGS.seed)
     setup_wandb(project='fql', group=FLAGS.run_group, name=exp_name)
@@ -59,7 +64,8 @@ def main(_):
 
     # Make environment and datasets.
     config = FLAGS.agent
-    env, eval_env, train_dataset, val_dataset = make_env_and_datasets(FLAGS.env_name, frame_stack=FLAGS.frame_stack)
+    # Use post-episode success timing to reproduce fql paper performance.
+    env, eval_env, train_dataset, val_dataset = make_env_and_datasets(FLAGS.env_name, frame_stack=FLAGS.frame_stack, success_timing='post')
     if FLAGS.video_episodes > 0:
         assert 'singletask' in FLAGS.env_name, 'Rendering is currently only supported for OGBench environments.'
     if FLAGS.online_steps > 0:
@@ -162,7 +168,9 @@ def main(_):
 
             # Update agent.
             if FLAGS.balanced_sampling:
+                # TODO: need to figure out update schema for confounding robust learning
                 # Half-and-half sampling from the training dataset and the replay buffer.
+                # try both schema: 1) half half 2) pure offline then pure online (no update flow)
                 dataset_batch = train_dataset.sample(config['batch_size'] // 2)
                 replay_batch = replay_buffer.sample(config['batch_size'] // 2)
                 batch = {k: np.concatenate([dataset_batch[k], replay_batch[k]], axis=0) for k in dataset_batch}

@@ -194,6 +194,27 @@ class Value(nn.Module):
         return v
 
 
+class ActionDiscriminator(nn.Module):
+    """Binary classifier to distinguish dataset vs. policy actions."""
+
+    hidden_dims: Sequence[int]
+    layer_norm: bool = False
+    encoder: nn.Module = None
+
+    def setup(self):
+        self.disc_net = MLP((*self.hidden_dims, 1), activate_final=False, layer_norm=self.layer_norm)
+
+    def __call__(self, observations, actions, return_logits: bool = False):
+        """Return probability (or logits) that an action came from the dataset."""
+        if self.encoder is not None:
+            observations = self.encoder(observations)
+        inputs = jnp.concatenate([observations, actions], axis=-1)
+        logits = self.disc_net(inputs).squeeze(-1)
+        if return_logits:
+            return logits
+        return nn.sigmoid(logits)
+
+
 class ActorVectorField(nn.Module):
     """Actor vector field network for flow matching.
 
@@ -232,3 +253,5 @@ class ActorVectorField(nn.Module):
         v = self.mlp(inputs)
 
         return v
+    
+
