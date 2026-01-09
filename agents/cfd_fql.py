@@ -78,17 +78,21 @@ class Robust_FQLAgent(flax.struct.PyTreeNode):
         noises = jax.random.normal(noise_rng, (batch_size, action_dim))
         target_flow_actions = self.compute_flow_actions(batch['observations'], noises=noises)
         actor_actions = self.network.select('actor_onestep_flow')(batch['observations'], noises, params=grad_params)
+        distill_loss = jnp.mean((actor_actions - target_flow_actions) ** 2)
+        # Only train discrimintor on actions within the clip range and still different
+        clipped_actor_actions = jnp.clip(actor_actions, -1, 1)
+        clipped_flow_actions = jnp.clip(target_flow_actions, -1, 1)
+        mask = jnp.any(clipped_actor_actions != clipped_flow_actions, axis=-1)
         pos_logits = self.network.select('discriminator')(
-            batch['observations'], target_flow_actions, return_logits=True, params=grad_params
+            batch['observations'], clipped_flow_actions, return_logits=True, params=grad_params
         )
         neg_logits = self.network.select('discriminator')(
-            batch['observations'], jax.lax.stop_gradient(actor_actions), return_logits=True, params=grad_params
+            batch['observations'], jax.lax.stop_gradient(clipped_actor_actions), return_logits=True, params=grad_params
         )
+        # if after clipping, actor actions are the same as flow actions, we want disciriminator to take it as positive
         pos_loss = optax.sigmoid_binary_cross_entropy(pos_logits, jnp.ones_like(pos_logits))
-        neg_loss = optax.sigmoid_binary_cross_entropy(neg_logits, jnp.zeros_like(neg_logits))
+        neg_loss = optax.sigmoid_binary_cross_entropy(neg_logits, jnp.zeros_like(neg_logits))[mask]
         disc_loss = jnp.mean(jnp.concatenate([pos_loss, neg_loss], axis=0))
-        # We might still need the distill loss to have a good starting point for one-step policy
-        distill_loss = jnp.mean((actor_actions - target_flow_actions) ** 2)
 
 
         # Confounding Robust Q loss.

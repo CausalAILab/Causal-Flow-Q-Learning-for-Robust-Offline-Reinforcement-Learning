@@ -42,8 +42,10 @@ config_flags.DEFINE_config_file('agent', 'agents/fql.py', lock_config=False)
 def main(_):
     # Set visible devices before importing jax and all our modules built upon it.
     os.environ["CUDA_VISIBLE_DEVICES"] = FLAGS.device_id
-    os.environ["MUJOCO_EGL_DEVICE_ID"] = FLAGS.device_id
-    os.environ['MUJOCO_GL'] = 'egl'
+    os.environ["MUJOCO_EGL_DEVICE_ID"] = "0"
+    os.environ["MUJOCO_GL"] = "egl"
+    os.environ["PYOPENGL_PLATFORM"] = "egl"
+    os.environ["LIBGL_ALWAYS_SOFTWARE"] = "true"
     import jax
     from agents import agents
     from envs.env_utils import make_env_and_datasets

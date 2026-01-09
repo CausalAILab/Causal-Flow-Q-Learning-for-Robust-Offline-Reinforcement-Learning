@@ -1,6 +1,7 @@
 import collections
 import re
 import time
+from importlib import metadata
 
 import gymnasium
 import numpy as np
@@ -88,6 +89,24 @@ class FrameStackWrapper(gymnasium.Wrapper):
         return self.get_observation(), reward, terminated, truncated, info
 
 
+def _parse_version(version_str):
+    nums = re.findall(r'\d+', version_str)
+    return tuple(int(num) for num in nums[:3])
+
+
+def _ogbench_supports_success_timing():
+    version_str = getattr(ogbench, '__version__', None)
+    if version_str is None:
+        try:
+            version_str = metadata.version('ogbench')
+        except metadata.PackageNotFoundError:
+            return None
+    try:
+        return _parse_version(version_str) >= (1, 2, 0)
+    except Exception:
+        return None
+
+
 def make_env_and_datasets(env_name, frame_stack=None, action_clip_eps=1e-5, success_timing='post'):
     """Make offline RL environment and datasets.
 
@@ -102,8 +121,17 @@ def make_env_and_datasets(env_name, frame_stack=None, action_clip_eps=1e-5, succ
 
     if 'singletask' in env_name:
         # OGBench.
-        env, train_dataset, val_dataset = ogbench.make_env_and_datasets(env_name, success_timing=success_timing)
-        eval_env = ogbench.make_env_and_datasets(env_name, env_only=True, success_timing=success_timing)
+        supports_success_timing = _ogbench_supports_success_timing()
+        if supports_success_timing is True:
+            env, train_dataset, val_dataset = ogbench.make_env_and_datasets(
+                env_name, success_timing=success_timing
+            )
+            eval_env = ogbench.make_env_and_datasets(
+                env_name, env_only=True, success_timing=success_timing
+            )
+        else:
+            env, train_dataset, val_dataset = ogbench.make_env_and_datasets(env_name)
+            eval_env = ogbench.make_env_and_datasets(env_name, env_only=True)
         env = EpisodeMonitor(env, filter_regexes=['.*privileged.*', '.*proprio.*'])
         eval_env = EpisodeMonitor(eval_env, filter_regexes=['.*privileged.*', '.*proprio.*'])
         train_dataset = Dataset.create(**train_dataset)
