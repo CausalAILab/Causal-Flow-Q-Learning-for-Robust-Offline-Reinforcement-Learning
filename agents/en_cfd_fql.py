@@ -12,7 +12,7 @@ from utils.flax_utils import ModuleDict, TrainState, nonpytree_field
 from utils.networks import ActorVectorField, Value, ActionDiscriminator
 
 
-class Robust_FQLAgent(flax.struct.PyTreeNode):
+class Robust_Ensemble_FQLAgent(flax.struct.PyTreeNode):
     """Confounding Robust Flow Q-learning (Robust-FQL) agent."""
 
     rng: Any
@@ -33,11 +33,7 @@ class Robust_FQLAgent(flax.struct.PyTreeNode):
             next_q = next_qs.mean(axis=0)
         
         # TODO: offline2online, for off data: do this update; for online data, use standard target q
-        # factual_weight = jax.lax.stop_gradient(jax.nn.sigmoid(pos_logits))
         factual_target_q = batch['rewards'] + self.config['discount'] * batch['masks'] * next_q
-        # ctf_target_q = jnp.quantile(batch['rewards'], self.config['quantile'], method='nearest') \
-            # + self.config['discount'] * jnp.quantile(batch['masks'] * next_q, self.config['quantile'], method='nearest')
-        # target_q = factual_weight * factual_target_q + (1 - factual_weight) * ctf_target_q
         target_q = factual_target_q
         q = self.network.select('critic')(batch['observations'], actions=batch['actions'], params=grad_params)
         # there are two Q networks in the ensemble, can view them as a batch with the same target
@@ -101,10 +97,8 @@ class Robust_FQLAgent(flax.struct.PyTreeNode):
         actor_actions = jnp.clip(actor_actions, -1, 1)
         qs = self.network.select('critic')(batch['observations'], actions=actor_actions)
         factual_weights = jax.lax.stop_gradient(jax.nn.sigmoid(neg_logits))
-        q = jnp.mean(
-            qs * factual_weights + (1 - factual_weights) * jnp.quantile(qs, self.config['quantile'], method='nearest'), 
-            axis=0
-        )
+        # Instead of taking the minimum over the batch, we take minimum of the ensembles for each (s, a) 
+        q = factual_weights * jnp.mean(qs, axis=0) + (1 - factual_weights) * jnp.min(qs, axis=0)
 
         q_loss = -q.mean()
         if self.config['normalize_q_loss']:
@@ -294,7 +288,7 @@ class Robust_FQLAgent(flax.struct.PyTreeNode):
 def get_config():
     config = ml_collections.ConfigDict(
         dict(
-            agent_name='robust_fql',  # Agent name.
+            agent_name='robust_en_fql',  # Agent name.
             ob_dims=ml_collections.config_dict.placeholder(list),  # Observation dimensions (will be set automatically).
             action_dim=ml_collections.config_dict.placeholder(int),  # Action dimension (will be set automatically).
             lr=3e-4,  # Learning rate.
@@ -309,7 +303,6 @@ def get_config():
             q_agg='mean',  # Aggregation method for target Q values.
             alpha=10.0,  # BC coefficient (need to be tuned for each environment).
             disc_coef=1.0,  # Weight for the action discriminator loss.
-            quantile=0.25,  # Quantile for confounding-robust target Q worst case.
             flow_steps=10,  # Number of flow steps.
             normalize_q_loss=False,  # Whether to normalize the Q loss.
             encoder=ml_collections.config_dict.placeholder(str),  # Visual encoder name (None, 'impala_small', etc.).
