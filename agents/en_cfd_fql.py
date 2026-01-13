@@ -54,7 +54,7 @@ class Robust_Ensemble_FQLAgent(flax.struct.PyTreeNode):
             'q_min': q.min(),
         }
 
-    def actor_loss(self, batch, grad_params, rng):
+    def actor_loss(self, batch, grad_params, progress, rng):
         """Compute the FQL actor loss."""
         batch_size, action_dim = batch['actions'].shape
         rng, x_rng, t_rng = jax.random.split(rng, 3)
@@ -106,7 +106,11 @@ class Robust_Ensemble_FQLAgent(flax.struct.PyTreeNode):
             q_loss = lam * q_loss
 
         # Total loss.
-        actor_loss = bc_flow_loss + self.config['disc_coef'] * disc_loss + q_loss + self.config['alpha'] * distill_loss
+        if self.config['disc_decay']:
+            current_disc_coef = jax.lax.max(0.1, self.config['disc_coef'] * jnp.exp(-2.0 * progress))
+        else:
+            current_disc_coef = self.config['disc_coef']
+        actor_loss = bc_flow_loss + current_disc_coef * disc_loss + q_loss + self.config['alpha'] * distill_loss
 
         # Additional metrics for logging.
         actions = self.sample_actions(batch['observations'], seed=rng)
@@ -121,10 +125,11 @@ class Robust_Ensemble_FQLAgent(flax.struct.PyTreeNode):
             'q_loss': q_loss,
             'q': q.mean(),
             'mse': mse,
+            'disc_coef': current_disc_coef,
         }
 
     @jax.jit
-    def total_loss(self, batch, grad_params, rng=None):
+    def total_loss(self, batch, grad_params, progress, rng=None):
         """Compute the total loss."""
         info = {}
         rng = rng if rng is not None else self.rng
@@ -135,7 +140,7 @@ class Robust_Ensemble_FQLAgent(flax.struct.PyTreeNode):
         for k, v in critic_info.items():
             info[f'critic/{k}'] = v
 
-        actor_loss, actor_info = self.actor_loss(batch, grad_params, actor_rng)
+        actor_loss, actor_info = self.actor_loss(batch, grad_params, progress, actor_rng)
         for k, v in actor_info.items():
             info[f'actor/{k}'] = v
 
@@ -152,12 +157,15 @@ class Robust_Ensemble_FQLAgent(flax.struct.PyTreeNode):
         network.params[f'modules_target_{module_name}'] = new_target_params
 
     @jax.jit
-    def update(self, batch):
-        """Update the agent and return a new agent with information dictionary."""
+    def update(self, batch, progress):
+        """
+        Update the agent and return a new agent with information dictionary.
+        progress is a float in [0, 1] indicating the training progress.
+        """
         new_rng, rng = jax.random.split(self.rng)
 
         def loss_fn(grad_params):
-            return self.total_loss(batch, grad_params, rng=rng)
+            return self.total_loss(batch, grad_params, progress, rng=rng)
 
         new_network, info = self.network.apply_loss_fn(loss_fn=loss_fn)
         self.target_update(new_network, 'critic')
@@ -243,7 +251,7 @@ class Robust_Ensemble_FQLAgent(flax.struct.PyTreeNode):
         critic_def = Value(
             hidden_dims=config['value_hidden_dims'],
             layer_norm=config['layer_norm'],
-            num_ensembles=2,
+            num_ensembles=config['num_ensembles'],
             encoder=encoders.get('critic'),
         )
         actor_bc_flow_def = ActorVectorField(
@@ -296,6 +304,7 @@ def get_config():
             actor_hidden_dims=(512, 512, 512, 512),  # Actor network hidden dimensions.
             value_hidden_dims=(512, 512, 512, 512),  # Value network hidden dimensions.
             act_disc_hidden_dims=(512, 512, 512, 512),  # Action discriminator hidden dimensions.
+            num_ensembles=2,  # Number of Q-function ensembles.
             layer_norm=True,  # Whether to use layer normalization.
             actor_layer_norm=False,  # Whether to use layer normalization for the actor.
             discount=0.99,  # Discount factor.
@@ -303,6 +312,7 @@ def get_config():
             q_agg='mean',  # Aggregation method for target Q values.
             alpha=10.0,  # BC coefficient (need to be tuned for each environment).
             disc_coef=1.0,  # Weight for the action discriminator loss.
+            disc_decay=True,  # Whether to decay the discriminator coefficient.
             flow_steps=10,  # Number of flow steps.
             normalize_q_loss=False,  # Whether to normalize the Q loss.
             encoder=ml_collections.config_dict.placeholder(str),  # Visual encoder name (None, 'impala_small', etc.).

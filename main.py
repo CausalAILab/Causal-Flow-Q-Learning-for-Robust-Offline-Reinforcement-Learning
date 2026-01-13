@@ -42,11 +42,14 @@ config_flags.DEFINE_config_file('agent', 'agents/fql.py', lock_config=False)
 def main(_):
     # Set visible devices before importing jax and all our modules built upon it.
     os.environ["CUDA_VISIBLE_DEVICES"] = FLAGS.device_id
-    os.environ["MUJOCO_EGL_DEVICE_ID"] = "0"
+    os.environ["MUJOCO_EGL_DEVICE_ID"] = "7"
     os.environ["MUJOCO_GL"] = "egl"
     os.environ["PYOPENGL_PLATFORM"] = "egl"
     os.environ["LIBGL_ALWAYS_SOFTWARE"] = "true"
+    # os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+    os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.3"
     import jax
+    import jax.numpy as jnp
     from agents import agents
     from envs.env_utils import make_env_and_datasets
     from utils.datasets import Dataset, ReplayBuffer
@@ -129,6 +132,8 @@ def main(_):
 
             if config['agent_name'] == 'rebrac':
                 agent, update_info = agent.update(batch, full_update=(i % config['actor_freq'] == 0))
+            elif config['agent_name'] == 'robust_en_fql':
+                agent, update_info = agent.update(batch, progress=i / (FLAGS.offline_steps + FLAGS.online_steps))
             else:
                 agent, update_info = agent.update(batch)
         else:
@@ -189,7 +194,10 @@ def main(_):
             train_metrics = {f'training/{k}': v for k, v in update_info.items()}
             if val_dataset is not None:
                 val_batch = val_dataset.sample(config['batch_size'])
-                _, val_info = agent.total_loss(val_batch, grad_params=None)
+                if config['agent_name'] == 'robust_en_fql':
+                    _, val_info = agent.total_loss(val_batch, grad_params=None, progress=i / (FLAGS.offline_steps + FLAGS.online_steps))
+                else:
+                    _, val_info = agent.total_loss(val_batch, grad_params=None)
                 train_metrics.update({f'validation/{k}': v for k, v in val_info.items()})
             train_metrics['time/epoch_time'] = (time.time() - last_time) / FLAGS.log_interval
             train_metrics['time/total_time'] = time.time() - first_time
