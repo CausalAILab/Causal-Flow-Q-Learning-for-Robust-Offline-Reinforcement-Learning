@@ -16,6 +16,7 @@ FLAGS = flags.FLAGS
 flags.DEFINE_string('run_group', 'Debug', 'Run group.')
 flags.DEFINE_integer('seed', 0, 'Random seed.')
 flags.DEFINE_string('device_id', '7', 'CUDA device ID.')
+flags.DEFINE_string('mujoco_device_id', '7', 'Mujoco device ID for rendering.')
 flags.DEFINE_string('env_name', 'cube-double-play-singletask-v0', 'Environment (dataset) name.')
 flags.DEFINE_string('save_dir', '/home/ml/explogs/fql', 'Save directory.')
 flags.DEFINE_string('restore_path', None, 'Restore path.')
@@ -42,12 +43,12 @@ config_flags.DEFINE_config_file('agent', 'agents/fql.py', lock_config=False)
 def main(_):
     # Set visible devices before importing jax and all our modules built upon it.
     os.environ["CUDA_VISIBLE_DEVICES"] = FLAGS.device_id
-    os.environ["MUJOCO_EGL_DEVICE_ID"] = "7"
+    os.environ["MUJOCO_EGL_DEVICE_ID"] = FLAGS.mujoco_device_id
     os.environ["MUJOCO_GL"] = "egl"
     os.environ["PYOPENGL_PLATFORM"] = "egl"
     os.environ["LIBGL_ALWAYS_SOFTWARE"] = "true"
     # os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
-    os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.3"
+    os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.23"
     import jax
     import jax.numpy as jnp
     from agents import agents
@@ -59,7 +60,7 @@ def main(_):
     
     # Set up logger.
     exp_name = get_exp_name(FLAGS.seed)
-    setup_wandb(project='fql', group=FLAGS.run_group, name=exp_name)
+    setup_wandb(project='fql', group=FLAGS.run_group, name=exp_name, outputdir=FLAGS.save_dir)
 
     FLAGS.save_dir = os.path.join(FLAGS.save_dir, wandb.run.project, FLAGS.run_group, exp_name)
     os.makedirs(FLAGS.save_dir, exist_ok=True)

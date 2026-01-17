@@ -107,7 +107,7 @@ class Robust_Ensemble_FQLAgent(flax.struct.PyTreeNode):
 
         # Total loss.
         if self.config['disc_decay']:
-            current_disc_coef = jax.lax.max(0.1, self.config['disc_coef'] * jnp.exp(-2.0 * progress))
+            current_disc_coef = jax.lax.max(1.0, self.config['disc_coef'] * jnp.exp(-2.0 * progress))
         else:
             current_disc_coef = self.config['disc_coef']
         actor_loss = bc_flow_loss + current_disc_coef * disc_loss + q_loss + self.config['alpha'] * distill_loss
