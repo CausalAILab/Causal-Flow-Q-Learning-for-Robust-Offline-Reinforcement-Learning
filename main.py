@@ -27,7 +27,7 @@ flags.DEFINE_integer('online_steps', 0, 'Number of online steps.')
 flags.DEFINE_integer('buffer_size', 2000000, 'Replay buffer size.')
 flags.DEFINE_integer('log_interval', 5000, 'Logging interval.')
 flags.DEFINE_integer('eval_interval', 100000, 'Evaluation interval.')
-flags.DEFINE_integer('save_interval', 1000000, 'Saving interval.')
+flags.DEFINE_integer('save_interval', 100000, 'Saving interval.')
 
 flags.DEFINE_integer('eval_episodes', 50, 'Number of evaluation episodes.')
 flags.DEFINE_integer('video_episodes', 0, 'Number of video episodes for each task.')
@@ -48,7 +48,7 @@ def main(_):
     os.environ["PYOPENGL_PLATFORM"] = "egl"
     os.environ["LIBGL_ALWAYS_SOFTWARE"] = "true"
     # os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
-    os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.23"
+    os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.22"
     import jax
     import jax.numpy as jnp
     from agents import agents
