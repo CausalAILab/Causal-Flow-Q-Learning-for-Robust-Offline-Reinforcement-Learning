@@ -88,7 +88,7 @@ def main(_):
 
     # Set up datasets.
     train_dataset = Dataset.create(**train_dataset)
-    if FLAGS.balanced_sampling or config['agent_name'] == 'robust_en_fql':
+    if FLAGS.balanced_sampling:
         # Create a separate replay buffer so that we can sample from both the training dataset and the replay buffer.
         example_transition = {k: v[0] for k, v in train_dataset.items()}
         replay_buffer = ReplayBuffer.create(example_transition, size=FLAGS.buffer_size)
@@ -184,7 +184,7 @@ def main(_):
             step += 1
 
             # Update agent.
-            if FLAGS.balanced_sampling or config['agent_name'] == 'robust_en_fql':
+            if FLAGS.balanced_sampling:
                 dataset_batch = train_dataset.sample(config['batch_size'] // 2)
                 replay_batch = replay_buffer.sample(config['batch_size'] // 2)
                 batch = {k: np.concatenate([dataset_batch[k], replay_batch[k]], axis=0) for k in dataset_batch}
@@ -194,7 +194,7 @@ def main(_):
             if config['agent_name'] == 'rebrac':
                 agent, update_info = agent.update(batch, full_update=(i % config['actor_freq'] == 0))
             elif config['agent_name'] == 'robust_en_fql':
-                agent, update_info = agent.update(batch, progress=i / FLAGS.offline_steps, mixedbatch=True)
+                agent, update_info = agent.update(batch, progress=i / FLAGS.offline_steps, online=True)
             else:
                 agent, update_info = agent.update(batch)
 
