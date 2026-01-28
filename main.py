@@ -49,6 +49,7 @@ def main(_):
     os.environ["LIBGL_ALWAYS_SOFTWARE"] = "true"
     # os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
     os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.22"
+    os.environ["JAX_TRACEBACK_FILTERING"]="off"
     import jax
     import jax.numpy as jnp
     from agents import agents
@@ -59,6 +60,10 @@ def main(_):
     from utils.log_utils import CsvLogger, get_exp_name, get_flag_dict, get_wandb_video, setup_wandb
     
     # Set up logger.
+    # if FLAGS.restore_epoch is not None:
+    #     exp_name = os.path.basename(FLAGS.restore_path)
+    #     setup_wandb(project='fql', group=FLAGS.run_group, name=exp_name, outputdir=FLAGS.save_dir, resume='allow', id=exp_name)
+    # else:
     exp_name = get_exp_name(FLAGS.seed)
     setup_wandb(project='fql', group=FLAGS.run_group, name=exp_name, outputdir=FLAGS.save_dir)
 
@@ -74,8 +79,8 @@ def main(_):
     env, eval_env, train_dataset, val_dataset = make_env_and_datasets(FLAGS.env_name, frame_stack=FLAGS.frame_stack, success_timing='post')
     if FLAGS.video_episodes > 0:
         assert 'singletask' in FLAGS.env_name, 'Rendering is currently only supported for OGBench environments.'
-    if FLAGS.online_steps > 0:
-        assert 'visual' not in FLAGS.env_name, 'Online fine-tuning is currently not supported for visual environments.'
+    # if FLAGS.online_steps > 0:
+    #     assert 'visual' not in FLAGS.env_name, 'Online fine-tuning is currently not supported for visual environments.'
 
     # Initialize agent.
     random.seed(FLAGS.seed)
@@ -83,7 +88,7 @@ def main(_):
 
     # Set up datasets.
     train_dataset = Dataset.create(**train_dataset)
-    if FLAGS.balanced_sampling:
+    if FLAGS.balanced_sampling or config['agent_name'] == 'robust_en_fql':
         # Create a separate replay buffer so that we can sample from both the training dataset and the replay buffer.
         example_transition = {k: v[0] for k, v in train_dataset.items()}
         replay_buffer = ReplayBuffer.create(example_transition, size=FLAGS.buffer_size)
@@ -114,6 +119,7 @@ def main(_):
 
     # Restore agent.
     if FLAGS.restore_path is not None:
+        FLAGS.restore_path = os.path.expanduser(FLAGS.restore_path)
         agent = restore_agent(agent, FLAGS.restore_path, FLAGS.restore_epoch)
 
     # Train agent.
@@ -127,6 +133,8 @@ def main(_):
     expl_metrics = dict()
     online_rng = jax.random.PRNGKey(FLAGS.seed)
     for i in tqdm.tqdm(range(1, FLAGS.offline_steps + FLAGS.online_steps + 1), smoothing=0.1, dynamic_ncols=True):
+        if FLAGS.restore_epoch is not None and i <= FLAGS.restore_epoch:
+            continue
         if i <= FLAGS.offline_steps:
             # Offline RL.
             batch = train_dataset.sample(config['batch_size'])
@@ -134,7 +142,8 @@ def main(_):
             if config['agent_name'] == 'rebrac':
                 agent, update_info = agent.update(batch, full_update=(i % config['actor_freq'] == 0))
             elif config['agent_name'] == 'robust_en_fql':
-                agent, update_info = agent.update(batch, progress=i / (FLAGS.offline_steps + FLAGS.online_steps))
+                # only decay disc_coef during offline phase
+                agent, update_info = agent.update(batch, progress=i / FLAGS.offline_steps)
             else:
                 agent, update_info = agent.update(batch)
         else:
@@ -175,10 +184,7 @@ def main(_):
             step += 1
 
             # Update agent.
-            if FLAGS.balanced_sampling:
-                # TODO: need to figure out update schema for confounding robust learning
-                # Half-and-half sampling from the training dataset and the replay buffer.
-                # try both schema: 1) half half 2) pure offline then pure online (no update flow)
+            if FLAGS.balanced_sampling or config['agent_name'] == 'robust_en_fql':
                 dataset_batch = train_dataset.sample(config['batch_size'] // 2)
                 replay_batch = replay_buffer.sample(config['batch_size'] // 2)
                 batch = {k: np.concatenate([dataset_batch[k], replay_batch[k]], axis=0) for k in dataset_batch}
@@ -187,6 +193,8 @@ def main(_):
 
             if config['agent_name'] == 'rebrac':
                 agent, update_info = agent.update(batch, full_update=(i % config['actor_freq'] == 0))
+            elif config['agent_name'] == 'robust_en_fql':
+                agent, update_info = agent.update(batch, progress=i / FLAGS.offline_steps, mixedbatch=True)
             else:
                 agent, update_info = agent.update(batch)
 
@@ -196,7 +204,7 @@ def main(_):
             if val_dataset is not None:
                 val_batch = val_dataset.sample(config['batch_size'])
                 if config['agent_name'] == 'robust_en_fql':
-                    _, val_info = agent.total_loss(val_batch, grad_params=None, progress=i / (FLAGS.offline_steps + FLAGS.online_steps))
+                    _, val_info = agent.total_loss(val_batch, grad_params=None, progress=i / FLAGS.offline_steps)
                 else:
                     _, val_info = agent.total_loss(val_batch, grad_params=None)
                 train_metrics.update({f'validation/{k}': v for k, v in val_info.items()})

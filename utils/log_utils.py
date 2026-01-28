@@ -65,7 +65,9 @@ def setup_wandb(
     group=None,
     name=None,
     mode='online',
-    outputdir=None
+    outputdir=None,
+    resume=None,
+    id=None,
 ):
     """Set up Weights & Biases for logging."""
     wandb_output_dir = outputdir or tempfile.mkdtemp()
@@ -85,6 +87,8 @@ def setup_wandb(
         ),
         mode=mode,
         save_code=True,
+        resume=resume,
+        id=id,
     )
 
     run = wandb.init(**init_kwargs)

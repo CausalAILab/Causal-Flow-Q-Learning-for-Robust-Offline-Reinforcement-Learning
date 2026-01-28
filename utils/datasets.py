@@ -162,6 +162,10 @@ class ReplayBuffer(Dataset):
         """Add a transition to the replay buffer."""
 
         def set_idx(buffer, new_element):
+            if self.frame_stack is not None and isinstance(new_element, np.ndarray) and len(new_element.shape) == 3:
+                # only save the newest frame
+                channel_single_frame = new_element.shape[2] // self.frame_stack
+                new_element = new_element[:, :, -channel_single_frame:]
             buffer[self.pointer] = new_element
 
         jax.tree_util.tree_map(set_idx, self._dict, transition)

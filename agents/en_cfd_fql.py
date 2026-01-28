@@ -1,4 +1,5 @@
 import copy
+from functools import partial
 from typing import Any
 
 import flax
@@ -32,7 +33,6 @@ class Robust_Ensemble_FQLAgent(flax.struct.PyTreeNode):
         else:
             next_q = next_qs.mean(axis=0)
         
-        # TODO: offline2online, for off data: do this update; for online data, use standard target q
         factual_target_q = batch['rewards'] + self.config['discount'] * batch['masks'] * next_q
         target_q = factual_target_q
         q = self.network.select('critic')(batch['observations'], actions=batch['actions'], params=grad_params)
@@ -54,7 +54,8 @@ class Robust_Ensemble_FQLAgent(flax.struct.PyTreeNode):
             'q_min': q.min(),
         }
 
-    def actor_loss(self, batch, grad_params, progress, rng):
+    @partial(jax.jit, static_argnames=['mixedbatch',])
+    def actor_loss(self, batch, grad_params, progress, rng, mixedbatch=False):
         """Compute the FQL actor loss."""
         batch_size, action_dim = batch['actions'].shape
         rng, x_rng, t_rng = jax.random.split(rng, 3)
@@ -97,8 +98,18 @@ class Robust_Ensemble_FQLAgent(flax.struct.PyTreeNode):
         actor_actions = jnp.clip(actor_actions, -1, 1)
         qs = self.network.select('critic')(batch['observations'], actions=actor_actions)
         factual_weights = jax.lax.stop_gradient(jax.nn.sigmoid(neg_logits))
-        # Instead of taking the minimum over the batch, we take minimum of the ensembles for each (s, a) 
-        q = factual_weights * jnp.mean(qs, axis=0) + (1 - factual_weights) * jnp.min(qs, axis=0)
+        # Instead of taking the minimum over the batch, we take minimum of the ensembles for each (s, a)
+        if mixedbatch:
+            first_part = factual_weights * jnp.mean(qs, axis=0) + (1 - factual_weights) * jnp.min(qs, axis=0)
+            second_part = jnp.mean(qs, axis=0)
+            batch_size = first_part.shape[0]
+            split_idx = batch_size // 2
+            q = jnp.concatenate([
+                first_part[:split_idx],
+                second_part[split_idx:]
+            ])
+        else:
+            q = factual_weights * jnp.mean(qs, axis=0) + (1 - factual_weights) * jnp.min(qs, axis=0)
 
         q_loss = -q.mean()
         if self.config['normalize_q_loss']:
@@ -107,7 +118,7 @@ class Robust_Ensemble_FQLAgent(flax.struct.PyTreeNode):
 
         # Total loss.
         if self.config['disc_decay']:
-            current_disc_coef = jax.lax.max(1.0, self.config['disc_coef'] * jnp.exp(-2.0 * progress))
+            current_disc_coef = jax.lax.max(1.0, self.config['disc_coef'] * jnp.exp(-2.0 * jax.lax.min(progress, 1.0)))
         else:
             current_disc_coef = self.config['disc_coef']
         actor_loss = bc_flow_loss + current_disc_coef * disc_loss + q_loss + self.config['alpha'] * distill_loss
@@ -128,8 +139,8 @@ class Robust_Ensemble_FQLAgent(flax.struct.PyTreeNode):
             'disc_coef': current_disc_coef,
         }
 
-    @jax.jit
-    def total_loss(self, batch, grad_params, progress, rng=None):
+    @partial(jax.jit, static_argnames=['mixedbatch',])
+    def total_loss(self, batch, grad_params, progress, rng=None, mixedbatch=False):
         """Compute the total loss."""
         info = {}
         rng = rng if rng is not None else self.rng
@@ -140,7 +151,7 @@ class Robust_Ensemble_FQLAgent(flax.struct.PyTreeNode):
         for k, v in critic_info.items():
             info[f'critic/{k}'] = v
 
-        actor_loss, actor_info = self.actor_loss(batch, grad_params, progress, actor_rng)
+        actor_loss, actor_info = self.actor_loss(batch, grad_params, progress, actor_rng, mixedbatch)
         for k, v in actor_info.items():
             info[f'actor/{k}'] = v
 
@@ -156,8 +167,8 @@ class Robust_Ensemble_FQLAgent(flax.struct.PyTreeNode):
         )
         network.params[f'modules_target_{module_name}'] = new_target_params
 
-    @jax.jit
-    def update(self, batch, progress):
+    @partial(jax.jit, static_argnames=['mixedbatch',])
+    def update(self, batch, progress, mixedbatch=False):
         """
         Update the agent and return a new agent with information dictionary.
         progress is a float in [0, 1] indicating the training progress.
@@ -165,7 +176,7 @@ class Robust_Ensemble_FQLAgent(flax.struct.PyTreeNode):
         new_rng, rng = jax.random.split(self.rng)
 
         def loss_fn(grad_params):
-            return self.total_loss(batch, grad_params, progress, rng=rng)
+            return self.total_loss(batch, grad_params, progress, rng=rng, mixedbatch=mixedbatch)
 
         new_network, info = self.network.apply_loss_fn(loss_fn=loss_fn)
         self.target_update(new_network, 'critic')

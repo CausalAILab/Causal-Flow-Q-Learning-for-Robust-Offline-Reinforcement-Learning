@@ -148,7 +148,6 @@ class IFQLAgent(flax.struct.PyTreeNode):
             vels = self.network.select('actor_flow')(n_observations, actions, t, is_encoded=True)
             actions = actions + vels / self.config['flow_steps']
         actions = jnp.clip(actions, -1, 1)
-
         # Pick the action with the highest Q-value.
         q = self.network.select('critic')(n_orig_observations, actions=actions).min(axis=0)
         actions = actions[jnp.argmax(q)]
