@@ -55,6 +55,10 @@ plt.tight_layout()
 # plt.show()
 fig = plt.gcf()
 fig.set_size_inches(8, 6)
-imgPath = f'single_bar_comparison.png'
-fig.savefig(imgPath, dpi=800, bbox_inches='tight', pad_inches=0)
+dpi = 360
+width_px = 8 * dpi
+height_px = 6 * dpi
+fig.set_size_inches(width_px / dpi, height_px / dpi)
+imgPath = f'figures/single_bar_comparison.png'
+fig.savefig(imgPath, dpi=dpi, bbox_inches='tight', pad_inches=0)
 plt.close()

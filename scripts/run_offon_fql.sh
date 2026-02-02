@@ -7,9 +7,9 @@ TASK=(
     # "visual-antmaze-teleport-navigate-singletask-task1-v0"
 )
 SEEDS=(
-    
-    "1234:3456:5678:891011"
-    "1234:2345:3456:4567"
+    "1234:3456:4567:6789"
+    "1234:3456:5678:6666"
+    # "1234:2345:3456:4567"
     # "1234:2345:5678:4567"
     # "1234:2345:3456:5678"
 )
@@ -22,6 +22,7 @@ ALPHA=(
     # 300
 )
 DISC=(
+    5.0
     15.0
     # 5.0
     # 10.0
@@ -34,17 +35,18 @@ for i in "${!TASK[@]}"; do
     # fi
     # task index starts from 0
     IFS=':' read -ra SEED_ARRAY <<< "${SEEDS[$i]}"
-    for j in {0..3}; do
-        session_id="offon_$((i*5+j+1))"
+    # only run three seeds for now
+    for j in {0..2}; do
+        session_id="offon_cube_$((i*5+j+1))"
         tmux has-session -t "$session_id" 2>/dev/null || tmux new-session -d -s "$session_id"
         COMMAND="python main.py --run_group=${TASK[$i]}_offon --env_name=${TASK[$i]} --offline_steps=500000 --online_steps=500000 --agent=agents/en_cfd_fql.py \
-                    --agent.encoder=impala_small --p_aug=0.5 --frame_stack=3 --device_id=$((i+2)) \
-                    --mujoco_device_id=$((i+3)) --agent.alpha=${ALPHA[$i]} \
+                    --agent.encoder=impala_small --p_aug=0.5 --frame_stack=3 --device_id=$((j+2)) \
+                    --mujoco_device_id=$((j+3)) --agent.alpha=${ALPHA[$i]} \
                     --seed=${SEED_ARRAY[$j]} --agent.disc_coef=${DISC[$i]}"
         # COMMAND="echo TASK ${TASK[$i]}_offon SEED ${SEED_ARRAY[$j]} Did $((j+6)) Mid $((7-5*j))"
         tmux send-keys -t "$session_id" "cd ~/development/fql/" C-m
         tmux send-keys -t "$session_id" "$COMMAND" C-m
-        # python main.py --run_group="DEBUG" --env_name="visual-cube-double-play-singletask-task1-v0" --offline_steps=1 --online_steps=500000 --agent=agents/en_cfd_fql.py \
-        #             --agent.encoder=impala_small --p_aug=0.5 --frame_stack=3 --device_id=6 --mujoco_device_id=7 --agent.alpha=100 --seed=1234 --agent.disc_coef=15 --eval_interval=0
+        # python main.py --run_group="DEBUG" --env_name="visual-cube-double-play-singletask-task1-v0" --offline_steps=1 --online_steps=100 --agent=agents/en_cfd_fql.py \
+        #             --agent.encoder=impala_small --p_aug=0.5 --frame_stack=3 --device_id=2 --mujoco_device_id=3 --agent.alpha=100 --seed=1234 --agent.disc_coef=15 --eval_interval=0
     done
 done
