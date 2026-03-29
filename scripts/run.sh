@@ -1,7 +1,9 @@
 #!/bin/bash
 TASK=(
-    "visual-cube-double-play-singletask-task1-v0"
-    "visual-cube-double-play-singletask-task1-v0"
+    "main/cheetah_run/expert/64px"
+    "main/cheetah_run/medium/64px"
+    # "visual-cube-double-play-singletask-task1-v0"
+    # "visual-cube-double-play-singletask-task1-v0"
     # "visual-cube-double-play-singletask-task2-v0"
     # "visual-cube-double-play-singletask-task3-v0"
     # "visual-cube-double-play-singletask-task4-v0"
@@ -97,13 +99,14 @@ for i in "${!TASK[@]}"; do
     #     continue
     # fi
     # task index starts from 0
-    for j in {0..3}; do
-        session_id="$((i*5+j+1))_ensemble"
+    for j in {0..2}; do
+        session_id="$((i*3+j))_cheetah"
         tmux has-session -t "$session_id" 2>/dev/null || tmux new-session -d -s "$session_id"
         COMMAND="python main.py --run_group=${TASK[$i]} --env_name=${TASK[$i]} --offline_steps=500000 --agent=agents/en_cfd_fql.py \
-                    --agent.encoder=impala_small --p_aug=0.5 --frame_stack=3 --device_id=$i \
-                    --mujoco_device_id=$(((i+1)%2)) --agent.alpha=${ALPHA[$i]} \
-                    --seed=${SEEDS[$j]} --agent.disc_coef=${DISC[$i]} --agent.num_ensembles=${NUM_ENSEMBELS[$i]}"
+                    --agent.encoder=impala_small --p_aug=0.5 --frame_stack=3 --device_id=$j \
+                    --mujoco_device_id=$(((j+1)%3)) --agent.alpha=${ALPHA[$i]} \
+                    --seed=${SEEDS[$j]} --agent.disc_coef=${DISC[$i]}"
+                    #  --agent.num_ensembles=${NUM_ENSEMBELS[$i]}"
         tmux send-keys -t "$session_id" "cd ~/development/fql/" C-m
         tmux send-keys -t "$session_id" "$COMMAND" C-m
         # tmux send-keys -t "$session_id" \

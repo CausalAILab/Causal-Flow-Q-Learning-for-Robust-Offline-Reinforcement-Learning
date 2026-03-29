@@ -1,11 +1,20 @@
 #!/bin/bash
 TASK=(
+    "main/cheetah_run/expert/64px"
+    "main/cheetah_run/expert/64px"
+    "main/cheetah_run/expert/64px"
+    "main/cheetah_run/expert/64px"
     # "visual-cube-double-play-singletask-task3-v0"
     # "visual-cube-double-play-singletask-task4-v0"
     # "visual-cube-double-play-singletask-task5-v0"
 
-    "visual-cube-single-play-singletask-task1-v0"
-    "visual-cube-double-play-singletask-task1-v0"
+    # "visual-cube-single-play-singletask-task1-v0"
+    # "visual-cube-double-play-singletask-task1-v0"
+
+    # "visual-cube-single-play-singletask-task5-v0"
+    # "visual-cube-double-play-singletask-task1-v0"
+    # "visual-puzzle-4x4-play-singletask-task1-v0"
+    # "visual-puzzle-3x3-play-singletask-task5-v0"
     
     # "visual-cube-single-play-singletask-task2-v0"
     # "visual-cube-single-play-singletask-task3-v0"
@@ -67,31 +76,36 @@ TASK=(
 )
 SEEDS=(
     "1234"
-    "2345"
+    # "2345"
     "3456"
     "4567"
     # "5678"
 )
 # Make sure you double check this for each set of tasks!
 ALPHA=(
+    # 1
+    # 3
+    10
+    50
+    # 100
     300
-    100
+    500
     # 300
     # 300
     # 300
     # 300
 )
 for i in "${!TASK[@]}"; do
-    if [ "$i" -lt 1 ]; then
-        continue
-    fi
+    # if [ "$i" -gt 0 ]; then
+    #     continue
+    # fi
     # task index starts from 0
-    for j in {0..3}; do
-        session_id="$(((i+2)*4+j+1))_offon_fql"
+    for j in {0..2}; do
+        session_id="fql_cheetah_$((i*3+j))"
         tmux has-session -t "$session_id" 2>/dev/null || tmux new-session -d -s "$session_id"
-        COMMAND="python main.py --run_group=${TASK[$i]}_offon --env_name=${TASK[$i]} --offline_steps=500000 --online_steps=500000 --agent=agents/fql.py \
-                    --agent.encoder=impala_small --p_aug=0.5 --frame_stack=3 --device_id=$((i+6)) \
-                    --mujoco_device_id=$((7-i)) --agent.alpha=${ALPHA[$i]} --seed=${SEEDS[$j]}"
+        COMMAND="python main.py --run_group=${TASK[$i]}_offon --env_name=${TASK[$i]} --offline_steps=500000 --agent=agents/fql.py \
+                    --agent.encoder=impala_small --p_aug=0.5 --frame_stack=3 --device_id=$((j%3)) \
+                    --mujoco_device_id=$(((j+1)%3)) --agent.alpha=${ALPHA[$i]} --seed=${SEEDS[$j]}"
         tmux send-keys -t "$session_id" "cd ~/development/fql/" C-m
         tmux send-keys -t "$session_id" "$COMMAND" C-m
         sleep 1s

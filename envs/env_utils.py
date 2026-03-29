@@ -107,7 +107,14 @@ def _ogbench_supports_success_timing():
         return None
 
 
-def make_env_and_datasets(env_name, frame_stack=None, action_clip_eps=1e-5, success_timing='post'):
+def make_env_and_datasets(
+    env_name, 
+    frame_stack=None, 
+    action_clip_eps=1e-5, 
+    success_timing='post', 
+    seed=0,
+    dataset_root=None
+):
     """Make offline RL environment and datasets.
 
     Args:
@@ -136,6 +143,15 @@ def make_env_and_datasets(env_name, frame_stack=None, action_clip_eps=1e-5, succ
         eval_env = EpisodeMonitor(eval_env, filter_regexes=['.*privileged.*', '.*proprio.*'])
         train_dataset = Dataset.create(**train_dataset)
         val_dataset = Dataset.create(**val_dataset)
+    elif 'cheetah' in env_name:
+        # V-D4RL Cheetah-run
+        from envs import dmc
+        from envs.vd4rl_utils import get_dataset, DMCToGymWrapper
+        train_dataset = get_dataset(env_name, dataset_root=dataset_root)
+        val_dataset = None
+        assert frame_stack == 3, 'frame_stack for V-D4RL cheetah env must be 3'
+        env = EpisodeMonitor(DMCToGymWrapper(dmc.make('cheetah_run', frame_stack=frame_stack, action_repeat=2, seed=seed)))
+        eval_env = EpisodeMonitor(DMCToGymWrapper(dmc.make('cheetah_run', frame_stack=frame_stack, action_repeat=2, seed=seed)))
     elif 'antmaze' in env_name and ('diverse' in env_name or 'play' in env_name or 'umaze' in env_name):
         # D4RL AntMaze.
         from envs import d4rl_utils
@@ -156,7 +172,7 @@ def make_env_and_datasets(env_name, frame_stack=None, action_clip_eps=1e-5, succ
     else:
         raise ValueError(f'Unsupported environment: {env_name}')
 
-    if frame_stack is not None:
+    if frame_stack is not None and 'cheetah' not in env_name:
         env = FrameStackWrapper(env, frame_stack)
         eval_env = FrameStackWrapper(eval_env, frame_stack)
 

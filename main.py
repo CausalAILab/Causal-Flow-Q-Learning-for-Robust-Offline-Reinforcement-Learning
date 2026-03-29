@@ -21,6 +21,7 @@ flags.DEFINE_string('env_name', 'cube-double-play-singletask-v0', 'Environment (
 flags.DEFINE_string('save_dir', '/home/ml/explogs/fql', 'Save directory.')
 flags.DEFINE_string('restore_path', None, 'Restore path.')
 flags.DEFINE_integer('restore_epoch', None, 'Restore epoch.')
+flags.DEFINE_string('dataset_root', '/home/ml/data', 'Dataset root.')
 
 flags.DEFINE_integer('offline_steps', 1000000, 'Number of offline steps.')
 flags.DEFINE_integer('online_steps', 0, 'Number of online steps.')
@@ -76,7 +77,13 @@ def main(_):
     # Make environment and datasets.
     config = FLAGS.agent
     # Use post-episode success timing to reproduce fql paper performance.
-    env, eval_env, train_dataset, val_dataset = make_env_and_datasets(FLAGS.env_name, frame_stack=FLAGS.frame_stack, success_timing='post')
+    env, eval_env, train_dataset, val_dataset = make_env_and_datasets(
+        FLAGS.env_name, 
+        frame_stack=FLAGS.frame_stack, 
+        success_timing='post', 
+        seed=FLAGS.seed,
+        dataset_root=FLAGS.dataset_root
+    )
     if FLAGS.video_episodes > 0:
         assert 'singletask' in FLAGS.env_name, 'Rendering is currently only supported for OGBench environments.'
     # if FLAGS.online_steps > 0:
