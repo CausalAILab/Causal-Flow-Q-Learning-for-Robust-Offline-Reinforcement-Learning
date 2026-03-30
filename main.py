@@ -8,6 +8,7 @@ import time
 import numpy as np
 import tqdm
 import wandb
+from PIL import Image
 from absl import app, flags
 from ml_collections import config_flags
 
@@ -37,6 +38,8 @@ flags.DEFINE_integer('video_frame_skip', 3, 'Frame skip for videos.')
 flags.DEFINE_float('p_aug', None, 'Probability of applying image augmentation.')
 flags.DEFINE_integer('frame_stack', None, 'Number of frames to stack.')
 flags.DEFINE_integer('balanced_sampling', 0, 'Whether to use balanced sampling for online fine-tuning.')
+flags.DEFINE_integer('confound_mode', 0, 'Whether to inject confounders and what to inject.')
+
 
 config_flags.DEFINE_config_file('agent', 'agents/fql.py', lock_config=False)
 
@@ -110,11 +113,26 @@ def main(_):
         if dataset is not None:
             dataset.p_aug = FLAGS.p_aug
             dataset.frame_stack = FLAGS.frame_stack
+            if FLAGS.confound_mode == 1:
+                # mask left half
+                dataset.mask = (0, 64, 0, 32)
+            elif FLAGS.confound_mode == 2:
+                # mask lower half, only body visible
+                dataset.mask = (35, 64, 0, 64)
+            elif FLAGS.confound_mode == 3:
+                # mask lower left half
+                dataset.mask = (35, 64, 0, 32)
             if config['agent_name'] == 'rebrac':
                 dataset.return_next_actions = True
 
     # Create agent.
     example_batch = train_dataset.sample(1)
+    if FLAGS.eval_interval == 0:
+        # save the observation and next_observation to the current dir for debug
+        print(example_batch['observations'].shape)
+        Image.fromarray(example_batch['observations'][0][:,:,:3], mode='RGB').save(os.path.join(os.getcwd(), f'obs_{FLAGS.confound_mode}.png'), format='PNG', compress_level=0)
+        Image.fromarray(example_batch['next_observations'][0][:,:,:3], mode='RGB').save(os.path.join(os.getcwd(), f'next_obs_{FLAGS.confound_mode}.png'), format='PNG', compress_level=0)
+
 
     agent_class = agents[config['agent_name']]
     agent = agent_class.create(

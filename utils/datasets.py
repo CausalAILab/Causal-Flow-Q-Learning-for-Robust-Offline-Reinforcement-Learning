@@ -54,6 +54,7 @@ class Dataset(FrozenDict):
         self.frame_stack = None  # Number of frames to stack; set outside the class.
         self.p_aug = None  # Image augmentation probability; set outside the class.
         self.return_next_actions = False  # Whether to additionally return next actions; set outside the class.
+        self.mask = None # For injecting confounders
 
         # Compute terminal and initial locations.
         self.terminal_locs = np.nonzero(self['terminals'] > 0)[0]
@@ -83,6 +84,8 @@ class Dataset(FrozenDict):
 
             batch['observations'] = jax.tree_util.tree_map(lambda *args: np.concatenate(args, axis=-1), *obs)
             batch['next_observations'] = jax.tree_util.tree_map(lambda *args: np.concatenate(args, axis=-1), *next_obs)
+        if self.mask is not None:
+            self.confounded_augment(batch, ['observations', 'next_observations'])
         if self.p_aug is not None:
             # Apply random-crop image augmentation.
             if np.random.rand() < self.p_aug:
@@ -108,6 +111,21 @@ class Dataset(FrozenDict):
                 lambda arr: np.array(batched_random_crop(arr, crop_froms, padding)) if len(arr.shape) == 4 else arr,
                 batch[key],
             )
+
+    def confounded_augment(self, batch, keys):
+        """Inject confounders via image patching to the given keys."""
+        x_from, x_to, y_from, y_to = self.mask
+        for key in keys:
+            batch[key] = jax.tree_util.tree_map(
+                lambda arr: self._apply_mask(arr, x_from, x_to, y_from, y_to) if len(arr.shape) == 4 else arr,
+                batch[key],
+            )
+
+    @staticmethod
+    def _apply_mask(arr, x_from, x_to, y_from, y_to):
+        arr = arr.copy()
+        arr[:, x_from:x_to, y_from:y_to, :] = 0
+        return arr
 
 
 class ReplayBuffer(Dataset):
