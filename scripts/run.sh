@@ -103,6 +103,12 @@ NUM_ENSEMBELS=(
     4
     6
 )
+CONFOUND_MODE=(
+    0
+    1
+    2
+    3
+)
 for i in "${!TASK[@]}"; do
     # if [ "$i" -lt 3 ]; then
     #     continue
@@ -114,7 +120,7 @@ for i in "${!TASK[@]}"; do
         COMMAND="python main.py --run_group=${TASK[$i]} --env_name=${TASK[$i]} --offline_steps=500000 --agent=agents/en_cfd_fql.py \
                     --agent.encoder=impala_small --p_aug=0.5 --frame_stack=3 --device_id=$j \
                     --mujoco_device_id=$(((j+1)%5)) --agent.alpha=${ALPHA[$i]} \
-                    --seed=${SEEDS[$j]} --agent.disc_coef=${DISC[$i]}"
+                    --seed=${SEEDS[$j]} --agent.disc_coef=${DISC[$i]} --confound_mode=${CONFOUND_MODE[$i]}"
                     #  --agent.num_ensembles=${NUM_ENSEMBELS[$i]}"
         tmux send-keys -t "$session_id" "cd ~/development/fql/" C-m
         tmux send-keys -t "$session_id" "$COMMAND" C-m

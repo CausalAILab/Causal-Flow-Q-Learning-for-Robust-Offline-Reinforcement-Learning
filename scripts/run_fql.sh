@@ -95,6 +95,12 @@ ALPHA=(
     # 300
     # 300
 )
+CONFOUND_MODE=(
+    0
+    1
+    2
+    3
+)
 for i in "${!TASK[@]}"; do
     # if [ "$i" -gt 0 ]; then
     #     continue
@@ -105,7 +111,7 @@ for i in "${!TASK[@]}"; do
         tmux has-session -t "$session_id" 2>/dev/null || tmux new-session -d -s "$session_id"
         COMMAND="python main.py --run_group=${TASK[$i]}_offon --env_name=${TASK[$i]} --offline_steps=500000 --agent=agents/fql.py \
                     --agent.encoder=impala_small --p_aug=0.5 --frame_stack=3 --device_id=$((j%3)) \
-                    --mujoco_device_id=$(((j+1)%3)) --agent.alpha=${ALPHA[$i]} --seed=${SEEDS[$j]}"
+                    --mujoco_device_id=$(((j+1)%3)) --agent.alpha=${ALPHA[$i]} --seed=${SEEDS[$j]} --confound_mode=${CONFOUND_MODE[$i]}"
         tmux send-keys -t "$session_id" "cd ~/development/fql/" C-m
         tmux send-keys -t "$session_id" "$COMMAND" C-m
         sleep 1s
