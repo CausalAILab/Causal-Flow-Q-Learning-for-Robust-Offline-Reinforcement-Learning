@@ -6,6 +6,13 @@ dist/
 .DS_Store
 .idea/
 .ruff_cache/
+.vscode/
+.claude/
 *.mp4
-test_*.ipynb
 *.png
+!assets/*.png
+*.ipynb
+*.csv
+wandb/
+exp/
+explogs/

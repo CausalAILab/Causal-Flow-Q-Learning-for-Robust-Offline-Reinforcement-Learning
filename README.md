@@ -148,11 +148,13 @@ requirements.txt
 If you find this work useful in your research, please cite:
 
 ```bibtex
-@article{li2026cfql,
-  title   = {Causal Flow Q-Learning for Robust Offline Reinforcement Learning},
-  author  = {Li, Mingxuan and Zhang, Junzhe and Bareinboim, Elias},
-  journal = {arXiv preprint arXiv:2602.02847},
-  year    = {2026}
+@inproceedings{
+li2026cfql,
+title={Causal Flow Q-Learning for Robust Offline Reinforcement Learning},
+author  = {Li, Mingxuan and Zhang, Junzhe and Bareinboim, Elias},
+booktitle={Forty-third International Conference on Machine Learning},
+year={2026},
+url={https://openreview.net/forum?id=IexQEyHm2L}
 }
 ```
 
