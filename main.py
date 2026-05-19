@@ -1,14 +1,11 @@
-import os
-import platform
-
 import json
+import os
 import random
 import time
 
 import numpy as np
 import tqdm
 import wandb
-from PIL import Image
 from absl import app, flags
 from ml_collections import config_flags
 
@@ -16,13 +13,13 @@ FLAGS = flags.FLAGS
 
 flags.DEFINE_string('run_group', 'Debug', 'Run group.')
 flags.DEFINE_integer('seed', 0, 'Random seed.')
-flags.DEFINE_string('device_id', '7', 'CUDA device ID.')
-flags.DEFINE_string('mujoco_device_id', '7', 'Mujoco device ID for rendering.')
+flags.DEFINE_string('device_id', '0', 'CUDA device ID.')
+flags.DEFINE_string('mujoco_device_id', '0', 'Mujoco device ID for rendering.')
 flags.DEFINE_string('env_name', 'cube-double-play-singletask-v0', 'Environment (dataset) name.')
-flags.DEFINE_string('save_dir', '/home/ml/explogs/fql', 'Save directory.')
+flags.DEFINE_string('save_dir', 'exp/', 'Save directory.')
 flags.DEFINE_string('restore_path', None, 'Restore path.')
 flags.DEFINE_integer('restore_epoch', None, 'Restore epoch.')
-flags.DEFINE_string('dataset_root', '/home/ml/data', 'Dataset root.')
+flags.DEFINE_string('dataset_root', None, 'Dataset root (used for V-D4RL).')
 
 flags.DEFINE_integer('offline_steps', 1000000, 'Number of offline steps.')
 flags.DEFINE_integer('online_steps', 0, 'Number of online steps.')
@@ -38,7 +35,7 @@ flags.DEFINE_integer('video_frame_skip', 3, 'Frame skip for videos.')
 flags.DEFINE_float('p_aug', None, 'Probability of applying image augmentation.')
 flags.DEFINE_integer('frame_stack', None, 'Number of frames to stack.')
 flags.DEFINE_integer('balanced_sampling', 0, 'Whether to use balanced sampling for online fine-tuning.')
-flags.DEFINE_integer('confound_mode', 0, 'Whether to inject confounders and what to inject.')
+flags.DEFINE_integer('confound_mode', 0, 'Confounder injection mode for pixel observations. 0=off, 1=mask left half, 2=mask lower half, 3=mask lower-left quadrant.')
 
 
 config_flags.DEFINE_config_file('agent', 'agents/fql.py', lock_config=False)
@@ -51,23 +48,16 @@ def main(_):
     os.environ["MUJOCO_GL"] = "egl"
     os.environ["PYOPENGL_PLATFORM"] = "egl"
     os.environ["LIBGL_ALWAYS_SOFTWARE"] = "true"
-    # os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
     os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.22"
-    os.environ["JAX_TRACEBACK_FILTERING"]="off"
+    os.environ["JAX_TRACEBACK_FILTERING"] = "off"
     import jax
-    import jax.numpy as jnp
     from agents import agents
     from envs.env_utils import make_env_and_datasets
     from utils.datasets import Dataset, ReplayBuffer
     from utils.evaluation import evaluate, flatten
     from utils.flax_utils import restore_agent, save_agent
     from utils.log_utils import CsvLogger, get_exp_name, get_flag_dict, get_wandb_video, setup_wandb
-    
-    # Set up logger.
-    # if FLAGS.restore_epoch is not None:
-    #     exp_name = os.path.basename(FLAGS.restore_path)
-    #     setup_wandb(project='fql', group=FLAGS.run_group, name=exp_name, outputdir=FLAGS.save_dir, resume='allow', id=exp_name)
-    # else:
+
     exp_name = get_exp_name(FLAGS.seed)
     setup_wandb(project='fql', group=FLAGS.run_group, name=exp_name, outputdir=FLAGS.save_dir)
 
@@ -79,18 +69,16 @@ def main(_):
 
     # Make environment and datasets.
     config = FLAGS.agent
-    # Use post-episode success timing to reproduce fql paper performance.
+    # Use post-episode success timing to reproduce FQL paper performance.
     env, eval_env, train_dataset, val_dataset = make_env_and_datasets(
-        FLAGS.env_name, 
-        frame_stack=FLAGS.frame_stack, 
-        success_timing='post', 
+        FLAGS.env_name,
+        frame_stack=FLAGS.frame_stack,
+        success_timing='post',
         seed=FLAGS.seed,
-        dataset_root=FLAGS.dataset_root
+        dataset_root=FLAGS.dataset_root,
     )
     if FLAGS.video_episodes > 0:
         assert 'singletask' in FLAGS.env_name, 'Rendering is currently only supported for OGBench environments.'
-    # if FLAGS.online_steps > 0:
-    #     assert 'visual' not in FLAGS.env_name, 'Online fine-tuning is currently not supported for visual environments.'
 
     # Initialize agent.
     random.seed(FLAGS.seed)
@@ -127,12 +115,6 @@ def main(_):
 
     # Create agent.
     example_batch = train_dataset.sample(1)
-    if FLAGS.eval_interval == 0:
-        # save the observation and next_observation to the current dir for debug
-        print(example_batch['observations'].shape)
-        Image.fromarray(example_batch['observations'][0][:,:,:3], mode='RGB').save(os.path.join(os.getcwd(), f'obs_{FLAGS.confound_mode}.png'), format='PNG', compress_level=0)
-        Image.fromarray(example_batch['next_observations'][0][:,:,:3], mode='RGB').save(os.path.join(os.getcwd(), f'next_obs_{FLAGS.confound_mode}.png'), format='PNG', compress_level=0)
-
 
     agent_class = agents[config['agent_name']]
     agent = agent_class.create(

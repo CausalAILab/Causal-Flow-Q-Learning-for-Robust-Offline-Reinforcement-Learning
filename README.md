@@ -1,298 +1,163 @@
 <div align="center">
 
-<div id="user-content-toc" style="margin-bottom: 50px">
-  <ul align="center" style="list-style: none;">
-    <summary>
-      <h1>Flow Q-Learning</h1>
-      <br>
-      <h2><a href="https://arxiv.org/abs/2502.02538">Paper</a> &emsp; <a href="https://seohong.me/projects/fql/">Project page</a></h2>
-    </summary>
-  </ul>
-</div>
+<h1>Causal Flow Q-Learning</h1>
 
-<img src="assets/fql.png" width="80%">
+<h3>Robust Offline Reinforcement Learning under Confounding</h3>
+
+<a href="https://arxiv.org/abs/2602.02847">Paper</a>
 
 </div>
 
 ## Overview
 
-Flow Q-learning (FQL) is a simple and performance data-driven RL algorithm
-that leverages an expressive *flow-matching* policy
-to model complex action distributions in data.
+**Causal Flow Q-Learning (CFQL)** is an offline reinforcement learning algorithm
+designed for pixel-based settings where the demonstrator and the learner may
+observe the scene differently — for example, when parts of the image are masked,
+occluded, or otherwise corrupted. Such mismatches act as unobserved
+confounders: a standard offline RL agent that ignores them can be fooled into
+preferring actions that look optimal in the data but transfer poorly to the
+learner's own observation channel.
+
+CFQL addresses this through two ideas built on top of
+[Flow Q-Learning (FQL)](https://arxiv.org/abs/2502.02538):
+
+1. **An action discriminator** that learns to distinguish actions drawn from
+   the BC flow policy (treated as in-support) from actions produced by the
+   distilled one-step policy. Its output is interpreted as a *factual weight*
+   — how likely a candidate action is to be well-supported by the demonstrator
+   distribution.
+2. **A causal-robust Q target** for the actor update: a Q-ensemble produces
+   both a mean and a per-(state, action) worst-case estimate, and the actor
+   maximises a factual-weight–blend of the two. When the discriminator is
+   confident the action is supported, the actor follows the mean Q; otherwise
+   it falls back on the worst-case Q.
+
+During offline-to-online fine-tuning the discriminator and worst-case bound are
+switched off, recovering a standard FQL update on the growing replay buffer.
+
+The code base builds on the reference implementations in
+[OGBench](https://github.com/seohongpark/ogbench) and the original FQL
+release; the baseline agents (FQL, IFQL, IQL, ReBRAC, SAC/RLPD) are kept in
+[agents/](agents/) for direct comparison.
 
 ## Installation
 
-FQL requires Python 3.9+ and is based on JAX. The main dependencies are
-`jax >= 0.4.26`, `ogbench == 1.1.0`, and `gymnasium == 0.29.1`.
-To install the full dependencies, simply run:
+CFQL requires Python 3.9+ and JAX. To install the full dependencies:
+
 ```bash
 pip install -r requirements.txt
 ```
 
+The main pinned dependencies are `jax >= 0.4.26`, `ogbench == 1.1.0`, and
+`gymnasium == 0.29.1`.
+
 > [!NOTE]
-> To use D4RL environments, you need to additionally set up MuJoCo 2.1.0.
+> To use D4RL environments, you also need to set up MuJoCo 2.1.0. For V-D4RL
+> (Cheetah-run) experiments, install `torchrl` and point `--dataset_root` at
+> a directory where the V-D4RL datasets can be downloaded.
 
 ## Usage
 
-The main implementation of FQL is in [agents/fql.py](agents/fql.py),
-and our implementations of four baselines (IQL, ReBRAC, IFQL, and RLPD)
-can also be found in the same directory.
-Here are some example commands (see [the section below](#reproducing-the-main-results) for the complete list):
-```bash
-# FQL on OGBench antsoccer-arena (offline RL)
-python main.py --env_name=antsoccer-arena-navigate-singletask-v0 --agent.discount=0.995 --agent.alpha=10
-# FQL on OGBench visual-cube-single (offline RL)
-python main.py --env_name=visual-cube-single-play-singletask-task1-v0 --offline_steps=500000 --agent.alpha=300 --agent.encoder=impala_small --p_aug=0.5 --frame_stack=3
-# FQL on OGBench scene (offline-to-online RL)
-python main.py --env_name=scene-play-singletask-v0 --online_steps=1000000 --agent.alpha=300
-```
+The CFQL implementations live in [agents/en_cfd_fql.py](agents/en_cfd_fql.py)
+(`robust_en_fql`, the ensemble variant used in the paper) and
+[agents/cfd_fql.py](agents/cfd_fql.py) (`robust_fql`, the simpler
+two-critic variant). All experiments are launched through a single entry
+point, [main.py](main.py).
 
-## Tips for hyperparameter tuning
-
-Here are some general tips for FQL's hyperparameter tuning for new tasks:
-
-* The most important hyperparameter of FQL is the BC coefficient (`--agent.alpha`).
-  This needs to be individually tuned for each environment.
-* Although this was not used in the original paper,
-  setting `--agent.normalize_q_loss=True` makes `alpha` invariant to the scale of the Q-values.
-  **For new environments, we highly recommend turning on this flag** (`--agent.normalize_q_loss=True`)
-  and tuning `alpha` starting from `[0.03, 0.1, 0.3, 1, 3, 10]`.
-* For other hyperparameters, you may use the default values in `agents/fql.py`.
-  For some tasks, setting `--agent.q_agg=min` (to enable clipped double Q-learning) may slightly improve performance.
-  See the ablation study in the paper for more details.
-* For pixel-based environments, don't forget to set `--agent.encoder=impala_small` (or larger encoders),
-  `--p_aug=0.5`, and `--frame_stack=3`.
-
-## Reproducing the main results
-
-We provide the complete list of the **exact command-line flags**
-used to produce the main results of FQL in the paper.
-
-> [!NOTE]
-> In OGBench, each environment provides five tasks, one of which is the default task.
-> This task corresponds to the environment ID without any task suffixes.
-> For example, the default task of `antmaze-large-navigate` is `task1`,
-> and `antmaze-large-navigate-singletask-v0` is the same environment as `antmaze-large-navigate-singletask-task1-v0`.
-
-<details>
-<summary><b>Click to expand the full list of commands</b></summary>
-
-### Offline RL
-
-#### FQL on state-based OGBench (default tasks)
+### Offline RL with CFQL
 
 ```bash
-# FQL on OGBench antmaze-large-navigate-singletask-v0 (=antmaze-large-navigate-singletask-task1-v0)
-python main.py --env_name=antmaze-large-navigate-singletask-v0 --agent.q_agg=min --agent.alpha=10
-# FQL on OGBench antmaze-giant-navigate-singletask-v0 (=antmaze-giant-navigate-singletask-task1-v0)
-python main.py --env_name=antmaze-giant-navigate-singletask-v0 --agent.discount=0.995 --agent.q_agg=min --agent.alpha=10
-# FQL on OGBench humanoidmaze-medium-navigate-singletask-v0 (=humanoidmaze-medium-navigate-singletask-task1-v0)
-python main.py --env_name=humanoidmaze-medium-navigate-singletask-v0 --agent.discount=0.995 --agent.alpha=30
-# FQL on OGBench humanoidmaze-large-navigate-singletask-v0 (=humanoidmaze-large-navigate-singletask-task1-v0)
-python main.py --env_name=humanoidmaze-large-navigate-singletask-v0 --agent.discount=0.995 --agent.alpha=30
-# FQL on OGBench antsoccer-arena-navigate-singletask-v0 (=antsoccer-arena-navigate-singletask-task4-v0)
-python main.py --env_name=antsoccer-arena-navigate-singletask-v0 --agent.discount=0.995 --agent.alpha=10
-# FQL on OGBench cube-single-play-singletask-v0 (=cube-single-play-singletask-task2-v0)
-python main.py --env_name=cube-single-play-singletask-v0 --agent.alpha=300
-# FQL on OGBench cube-double-play-singletask-v0 (=cube-double-play-singletask-task2-v0)
-python main.py --env_name=cube-double-play-singletask-v0 --agent.alpha=300
-# FQL on OGBench scene-play-singletask-v0 (=scene-play-singletask-task2-v0)
-python main.py --env_name=scene-play-singletask-v0 --agent.alpha=300
-# FQL on OGBench puzzle-3x3-play-singletask-v0 (=puzzle-3x3-play-singletask-task4-v0)
-python main.py --env_name=puzzle-3x3-play-singletask-v0 --agent.alpha=1000
-# FQL on OGBench puzzle-4x4-play-singletask-v0 (=puzzle-4x4-play-singletask-task4-v0)
-python main.py --env_name=puzzle-4x4-play-singletask-v0 --agent.alpha=1000
+# CFQL on OGBench visual-cube-double with the left half of the frame masked.
+python main.py \
+    --env_name=visual-cube-double-play-singletask-task1-v0 \
+    --agent=agents/en_cfd_fql.py \
+    --offline_steps=500000 \
+    --agent.alpha=300 \
+    --agent.disc_coef=15.0 \
+    --agent.encoder=impala_small \
+    --p_aug=0.5 --frame_stack=3 \
+    --confound_mode=1
 ```
 
-#### FQL on state-based OGBench (all tasks)
+### Offline-to-online fine-tuning
 
 ```bash
-# FQL on OGBench antmaze-large-navigate-singletask-{task1, task2, task3, task4, task5}-v0 (default: task1)
-python main.py --env_name=antmaze-large-navigate-singletask-task1-v0 --agent.q_agg=min --agent.alpha=10
-python main.py --env_name=antmaze-large-navigate-singletask-task2-v0 --agent.q_agg=min --agent.alpha=10
-python main.py --env_name=antmaze-large-navigate-singletask-task3-v0 --agent.q_agg=min --agent.alpha=10
-python main.py --env_name=antmaze-large-navigate-singletask-task4-v0 --agent.q_agg=min --agent.alpha=10
-python main.py --env_name=antmaze-large-navigate-singletask-task5-v0 --agent.q_agg=min --agent.alpha=10
-# FQL on OGBench antmaze-giant-navigate-singletask-{task1, task2, task3, task4, task5}-v0 (default: task1)
-python main.py --env_name=antmaze-giant-navigate-singletask-task1-v0 --agent.discount=0.995 --agent.q_agg=min --agent.alpha=10
-python main.py --env_name=antmaze-giant-navigate-singletask-task2-v0 --agent.discount=0.995 --agent.q_agg=min --agent.alpha=10
-python main.py --env_name=antmaze-giant-navigate-singletask-task3-v0 --agent.discount=0.995 --agent.q_agg=min --agent.alpha=10
-python main.py --env_name=antmaze-giant-navigate-singletask-task4-v0 --agent.discount=0.995 --agent.q_agg=min --agent.alpha=10
-python main.py --env_name=antmaze-giant-navigate-singletask-task5-v0 --agent.discount=0.995 --agent.q_agg=min --agent.alpha=10
-# FQL on OGBench humanoidmaze-medium-navigate-singletask-{task1, task2, task3, task4, task5}-v0 (default: task1)
-python main.py --env_name=humanoidmaze-medium-navigate-singletask-task1-v0 --agent.discount=0.995 --agent.alpha=30
-python main.py --env_name=humanoidmaze-medium-navigate-singletask-task2-v0 --agent.discount=0.995 --agent.alpha=30
-python main.py --env_name=humanoidmaze-medium-navigate-singletask-task3-v0 --agent.discount=0.995 --agent.alpha=30
-python main.py --env_name=humanoidmaze-medium-navigate-singletask-task4-v0 --agent.discount=0.995 --agent.alpha=30
-python main.py --env_name=humanoidmaze-medium-navigate-singletask-task5-v0 --agent.discount=0.995 --agent.alpha=30
-# FQL on OGBench humanoidmaze-large-navigate-singletask-{task1, task2, task3, task4, task5}-v0 (default: task1)
-python main.py --env_name=humanoidmaze-large-navigate-singletask-task1-v0 --agent.discount=0.995 --agent.alpha=30
-python main.py --env_name=humanoidmaze-large-navigate-singletask-task2-v0 --agent.discount=0.995 --agent.alpha=30
-python main.py --env_name=humanoidmaze-large-navigate-singletask-task3-v0 --agent.discount=0.995 --agent.alpha=30
-python main.py --env_name=humanoidmaze-large-navigate-singletask-task4-v0 --agent.discount=0.995 --agent.alpha=30
-python main.py --env_name=humanoidmaze-large-navigate-singletask-task5-v0 --agent.discount=0.995 --agent.alpha=30
-# FQL on OGBench antsoccer-arena-navigate-singletask-{task1, task2, task3, task4, task5}-v0 (default: task4)
-python main.py --env_name=antsoccer-arena-navigate-singletask-task1-v0 --agent.discount=0.995 --agent.alpha=10
-python main.py --env_name=antsoccer-arena-navigate-singletask-task2-v0 --agent.discount=0.995 --agent.alpha=10
-python main.py --env_name=antsoccer-arena-navigate-singletask-task3-v0 --agent.discount=0.995 --agent.alpha=10
-python main.py --env_name=antsoccer-arena-navigate-singletask-task4-v0 --agent.discount=0.995 --agent.alpha=10
-python main.py --env_name=antsoccer-arena-navigate-singletask-task5-v0 --agent.discount=0.995 --agent.alpha=10
-# FQL on OGBench cube-single-play-singletask-{task1, task2, task3, task4, task5}-v0 (default: task2)
-python main.py --env_name=cube-single-play-singletask-task1-v0 --agent.alpha=300
-python main.py --env_name=cube-single-play-singletask-task2-v0 --agent.alpha=300
-python main.py --env_name=cube-single-play-singletask-task3-v0 --agent.alpha=300
-python main.py --env_name=cube-single-play-singletask-task4-v0 --agent.alpha=300
-python main.py --env_name=cube-single-play-singletask-task5-v0 --agent.alpha=300
-# FQL on OGBench cube-double-play-singletask-{task1, task2, task3, task4, task5}-v0 (default: task2)
-python main.py --env_name=cube-double-play-singletask-task1-v0 --agent.alpha=300
-python main.py --env_name=cube-double-play-singletask-task2-v0 --agent.alpha=300
-python main.py --env_name=cube-double-play-singletask-task3-v0 --agent.alpha=300
-python main.py --env_name=cube-double-play-singletask-task4-v0 --agent.alpha=300
-python main.py --env_name=cube-double-play-singletask-task5-v0 --agent.alpha=300
-# FQL on OGBench scene-play-singletask-{task1, task2, task3, task4, task5}-v0 (default: task2)
-python main.py --env_name=scene-play-singletask-task1-v0 --agent.alpha=300
-python main.py --env_name=scene-play-singletask-task2-v0 --agent.alpha=300
-python main.py --env_name=scene-play-singletask-task3-v0 --agent.alpha=300
-python main.py --env_name=scene-play-singletask-task4-v0 --agent.alpha=300
-python main.py --env_name=scene-play-singletask-task5-v0 --agent.alpha=300
-# FQL on OGBench puzzle-3x3-play-singletask-{task1, task2, task3, task4, task5}-v0 (default: task4)
-python main.py --env_name=puzzle-3x3-play-singletask-task1-v0 --agent.alpha=1000
-python main.py --env_name=puzzle-3x3-play-singletask-task2-v0 --agent.alpha=1000
-python main.py --env_name=puzzle-3x3-play-singletask-task3-v0 --agent.alpha=1000
-python main.py --env_name=puzzle-3x3-play-singletask-task4-v0 --agent.alpha=1000
-python main.py --env_name=puzzle-3x3-play-singletask-task5-v0 --agent.alpha=1000
-# FQL on OGBench puzzle-4x4-play-singletask-{task1, task2, task3, task4, task5}-v0 (default: task4)
-python main.py --env_name=puzzle-4x4-play-singletask-task1-v0 --agent.alpha=1000
-python main.py --env_name=puzzle-4x4-play-singletask-task2-v0 --agent.alpha=1000
-python main.py --env_name=puzzle-4x4-play-singletask-task3-v0 --agent.alpha=1000
-python main.py --env_name=puzzle-4x4-play-singletask-task4-v0 --agent.alpha=1000
-python main.py --env_name=puzzle-4x4-play-singletask-task5-v0 --agent.alpha=1000
+# Pretrain offline, then continue with online interaction.
+python main.py \
+    --env_name=visual-cube-single-play-singletask-task1-v0 \
+    --agent=agents/en_cfd_fql.py \
+    --offline_steps=500000 --online_steps=500000 \
+    --agent.alpha=100 \
+    --agent.disc_coef=15.0 \
+    --agent.encoder=impala_small \
+    --p_aug=0.5 --frame_stack=3
 ```
 
-#### FQL on pixel-based OGBench
+### Baselines
+
+Swap in any of the bundled baselines through `--agent`:
 
 ```bash
-# FQL on OGBench visual-cube-single-play-singletask-task1-v0
-python main.py --env_name=visual-cube-single-play-singletask-task1-v0 --offline_steps=500000 --agent.alpha=300 --agent.encoder=impala_small --p_aug=0.5 --frame_stack=3
-# FQL on OGBench visual-cube-double-play-singletask-task1-v0
-python main.py --env_name=visual-cube-double-play-singletask-task1-v0 --offline_steps=500000 --agent.alpha=100 --agent.encoder=impala_small --p_aug=0.5 --frame_stack=3
-# FQL on OGBench visual-scene-play-singletask-task1-v0
-python main.py --env_name=visual-scene-play-singletask-task1-v0 --offline_steps=500000 --agent.alpha=100 --agent.encoder=impala_small --p_aug=0.5 --frame_stack=3
-# FQL on OGBench visual-puzzle-3x3-play-singletask-task1-v0
-python main.py --env_name=visual-puzzle-3x3-play-singletask-task1-v0 --offline_steps=500000 --agent.alpha=300 --agent.encoder=impala_small --p_aug=0.5 --frame_stack=3
-# FQL on OGBench visual-puzzle-4x4-play-singletask-task1-v0
-python main.py --env_name=visual-puzzle-4x4-play-singletask-task1-v0 --offline_steps=500000 --agent.alpha=300 --agent.encoder=impala_small --p_aug=0.5 --frame_stack=3
+# FQL baseline (no causal correction).
+python main.py --env_name=visual-cube-double-play-singletask-task1-v0 \
+    --agent=agents/fql.py --offline_steps=500000 --agent.alpha=300 \
+    --agent.encoder=impala_small --p_aug=0.5 --frame_stack=3
+
+# IQL / ReBRAC / IFQL baselines work the same way.
+python main.py --env_name=... --agent=agents/iql.py    ...
+python main.py --env_name=... --agent=agents/rebrac.py ...
+python main.py --env_name=... --agent=agents/ifql.py   ...
 ```
 
-#### FQL on D4RL
+### Confounder modes
 
-```bash
-# FQL on D4RL antmaze-umaze-v2
-python main.py --env_name=antmaze-umaze-v2 --offline_steps=500000 --agent.alpha=10
-# FQL on D4RL antmaze-umaze-diverse-v2
-python main.py --env_name=antmaze-umaze-diverse-v2 --offline_steps=500000 --agent.alpha=10
-# FQL on D4RL antmaze-medium-play-v2
-python main.py --env_name=antmaze-medium-play-v2 --offline_steps=500000 --agent.alpha=10
-# FQL on D4RL antmaze-medium-diverse-v2
-python main.py --env_name=antmaze-medium-diverse-v2 --offline_steps=500000 --agent.alpha=10
-# FQL on D4RL antmaze-large-play-v2
-python main.py --env_name=antmaze-large-play-v2 --offline_steps=500000 --agent.alpha=3
-# FQL on D4RL antmaze-large-diverse-v2
-python main.py --env_name=antmaze-large-diverse-v2 --offline_steps=500000 --agent.alpha=3
-# FQL on D4RL pen-human-v1
-python main.py --env_name=pen-human-v1 --offline_steps=500000 --agent.q_agg=min --agent.alpha=10000
-# FQL on D4RL pen-cloned-v1
-python main.py --env_name=pen-cloned-v1 --offline_steps=500000 --agent.q_agg=min --agent.alpha=10000
-# FQL on D4RL pen-expert-v1
-python main.py --env_name=pen-expert-v1 --offline_steps=500000 --agent.q_agg=min --agent.alpha=3000
-# FQL on D4RL door-human-v1
-python main.py --env_name=door-human-v1 --offline_steps=500000 --agent.q_agg=min --agent.alpha=30000
-# FQL on D4RL door-cloned-v1
-python main.py --env_name=door-cloned-v1 --offline_steps=500000 --agent.q_agg=min --agent.alpha=30000
-# FQL on D4RL door-expert-v1
-python main.py --env_name=door-expert-v1 --offline_steps=500000 --agent.q_agg=min --agent.alpha=30000
-# FQL on D4RL hammer-human-v1
-python main.py --env_name=hammer-human-v1 --offline_steps=500000 --agent.q_agg=min --agent.alpha=30000
-# FQL on D4RL hammer-cloned-v1
-python main.py --env_name=hammer-cloned-v1 --offline_steps=500000 --agent.q_agg=min --agent.alpha=10000
-# FQL on D4RL hammer-expert-v1
-python main.py --env_name=hammer-expert-v1 --offline_steps=500000 --agent.q_agg=min --agent.alpha=30000
-# FQL on D4RL relocate-human-v1
-python main.py --env_name=relocate-human-v1 --offline_steps=500000 --agent.q_agg=min --agent.alpha=10000
-# FQL on D4RL relocate-cloned-v1
-python main.py --env_name=relocate-cloned-v1 --offline_steps=500000 --agent.q_agg=min --agent.alpha=30000
-# FQL on D4RL relocate-expert-v1
-python main.py --env_name=relocate-expert-v1 --offline_steps=500000 --agent.q_agg=min --agent.alpha=30000
+`--confound_mode` injects an observation-space confounder by zeroing a fixed
+region of every (64×64) pixel observation:
+
+| Value | Region masked            |
+| ----- | ------------------------ |
+| `0`   | No masking (default)     |
+| `1`   | Left half                |
+| `2`   | Lower half               |
+| `3`   | Lower-left quadrant      |
+
+These mismatches are the offline-RL confounders studied in the paper.
+
+### Key hyperparameters
+
+| Flag                                         | Meaning                                                                                |
+| -------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `--agent.alpha`                              | BC-distillation coefficient; needs to be tuned per environment.                        |
+| `--agent.disc_coef`                          | Weight of the action-discriminator loss. Decayed during training if `disc_decay=True`. |
+| `--agent.num_ensembles` (`en_cfd_fql` only)  | Size of the Q-ensemble used to build the worst-case target.                            |
+| `--agent.normalize_q_loss`                   | Scale-invariant Q loss; recommended for new tasks.                                     |
+| `--agent.encoder`, `--p_aug`, `--frame_stack`| Visual-input settings for pixel observations.                                          |
+
+## Code layout
+
+```
+agents/        # Agent implementations (CFQL + baselines)
+envs/          # Environment wrappers (OGBench, D4RL, V-D4RL/DMC)
+utils/         # Networks, dataset/replay buffer, evaluation, logging
+main.py        # Single training entry point
+requirements.txt
 ```
 
-#### IQL, ReBRAC, and IFQL (examples)
+## Citation
 
-```bash
-# IQL on OGBench humanoidmaze-medium-navigate-singletask-v0
-python main.py --env_name=humanoidmaze-medium-navigate-singletask-v0 --agent=agents/iql.py --agent.discount=0.995 --agent.alpha=10
-# ReBRAC on OGBench humanoidmaze-medium-navigate-singletask-v0 
-python main.py --env_name=humanoidmaze-medium-navigate-singletask-v0 --agent=agents/rebrac.py --agent.discount=0.995 --agent.alpha_actor=0.01 --agent.alpha_critic=0.01
-# IFQL on OGBench humanoidmaze-medium-navigate-singletask-v0
-python main.py --env_name=humanoidmaze-medium-navigate-singletask-v0 --agent=agents/ifql.py --agent.discount=0.995 --agent.num_samples=32
-# IQL on OGBench visual-cube-single-play-singletask-task1-v0
-python main.py --env_name=visual-cube-single-play-singletask-task1-v0 --offline_steps=500000 --agent=agents/iql.py --agent.alpha=1 --agent.encoder=impala_small --p_aug=0.5 --frame_stack=3
-# ReBRAC on OGBench visual-cube-single-play-singletask-task1-v0
-python main.py --env_name=visual-cube-single-play-singletask-task1-v0 --offline_steps=500000 --agent=agents/rebrac.py --agent.alpha_actor=1 --agent.alpha_critic=0 --agent.encoder=impala_small --p_aug=0.5 --frame_stack=3
-# IFQL on OGBench visual-cube-single-play-singletask-task1-v0
-python main.py --env_name=visual-cube-single-play-singletask-task1-v0 --offline_steps=500000 --agent=agents/ifql.py --agent.num_samples=32 --agent.encoder=impala_small --p_aug=0.5 --frame_stack=3
+If you find this work useful in your research, please cite:
+
+```bibtex
+@article{li2026cfql,
+  title   = {Causal Flow Q-Learning for Robust Offline Reinforcement Learning},
+  author  = {Li, Mingxuan and Zhang, Junzhe and Bareinboim, Elias},
+  journal = {arXiv preprint arXiv:2602.02847},
+  year    = {2026}
+}
 ```
-
-### Offline-to-online RL
-
-#### FQL
-
-```bash
-# FQL on OGBench humanoidmaze-medium-navigate-singletask-v0
-python main.py --env_name=humanoidmaze-medium-navigate-singletask-v0 --online_steps=1000000 --agent.discount=0.995 --agent.alpha=100
-# FQL on OGBench antsoccer-arena-navigate-singletask-v0
-python main.py --env_name=antsoccer-arena-navigate-singletask-v0 --online_steps=1000000 --agent.discount=0.995 --agent.alpha=30
-# FQL on OGBench cube-double-play-singletask-v0
-python main.py --env_name=cube-double-play-singletask-v0 --online_steps=1000000 --agent.alpha=300
-# FQL on OGBench scene-play-singletask-v0
-python main.py --env_name=scene-play-singletask-v0 --online_steps=1000000 --agent.alpha=300
-# FQL on OGBench puzzle-4x4-play-singletask-v0
-python main.py --env_name=puzzle-4x4-play-singletask-v0 --online_steps=1000000 --agent.alpha=1000
-# FQL on D4RL antmaze-umaze-v2
-python main.py --env_name=antmaze-umaze-v2 --online_steps=1000000 --agent.alpha=10
-# FQL on D4RL antmaze-umaze-diverse-v2
-python main.py --env_name=antmaze-umaze-diverse-v2 --online_steps=1000000 --agent.alpha=10
-# FQL on D4RL antmaze-medium-play-v2
-python main.py --env_name=antmaze-medium-play-v2 --online_steps=1000000 --agent.alpha=10
-# FQL on D4RL antmaze-medium-diverse-v2
-python main.py --env_name=antmaze-medium-diverse-v2 --online_steps=1000000 --agent.alpha=10
-# FQL on D4RL antmaze-large-play-v2
-python main.py --env_name=antmaze-large-play-v2 --online_steps=1000000 --agent.alpha=3
-# FQL on D4RL antmaze-large-diverse-v2
-python main.py --env_name=antmaze-large-diverse-v2 --online_steps=1000000 --agent.alpha=3
-# FQL on D4RL pen-cloned-v1
-python main.py --env_name=pen-cloned-v1 --online_steps=1000000 --agent.q_agg=min --agent.alpha=1000
-# FQL on D4RL door-cloned-v1
-python main.py --env_name=door-cloned-v1 --online_steps=1000000 --agent.q_agg=min --agent.alpha=1000
-# FQL on D4RL hammer-cloned-v1
-python main.py --env_name=hammer-cloned-v1 --online_steps=1000000 --agent.q_agg=min --agent.alpha=1000
-# FQL on D4RL relocate-cloned-v1
-python main.py --env_name=relocate-cloned-v1 --online_steps=1000000 --agent.q_agg=min --agent.alpha=10000
-```
-
-#### IQL, ReBRAC, IFQL, and RLPD (examples)
-
-```bash
-# IQL on OGBench humanoidmaze-medium-navigate-singletask-v0
-python main.py --env_name=humanoidmaze-medium-navigate-singletask-v0 --online_steps=1000000 --agent=agents/iql.py --agent.discount=0.995 --agent.alpha=10
-# ReBRAC on OGBench humanoidmaze-medium-navigate-singletask-v0 
-python main.py --env_name=humanoidmaze-medium-navigate-singletask-v0 --online_steps=1000000 --agent=agents/rebrac.py --agent.discount=0.995 --agent.alpha_actor=0.01 --agent.alpha_critic=0.01
-# IFQL on OGBench humanoidmaze-medium-navigate-singletask-v0
-python main.py --env_name=humanoidmaze-medium-navigate-singletask-v0 --online_steps=1000000 --agent=agents/ifql.py --agent.discount=0.995 --agent.num_samples=32
-# RLPD on OGBench humanoidmaze-medium-navigate-singletask-v0
-python main.py --env_name=humanoidmaze-medium-navigate-singletask-v0 --offline_steps=0 --online_steps=1000000 --agent=agents/sac.py --agent.discount=0.995 --balanced_sampling=1
-```
-</details>
 
 ## Acknowledgments
 
-This codebase is built on top of [OGBench](https://github.com/seohongpark/ogbench)'s reference implementations.
+This code base is built on top of [FQL](https://github.com/seohongpark/fql)
+and [OGBench](https://github.com/seohongpark/ogbench)'s reference
+implementations.

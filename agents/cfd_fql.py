@@ -13,53 +13,38 @@ from utils.networks import ActorVectorField, Value, ActionDiscriminator
 
 
 class Robust_FQLAgent(flax.struct.PyTreeNode):
-    """Confounding Robust Flow Q-learning (Robust-FQL) agent."""
+    """Causal Flow Q-learning (CFQL) agent — single critic-pair variant."""
 
     rng: Any
     network: Any
     config: Any = nonpytree_field()
 
     def critic_loss(self, batch, grad_params, rng):
-        """Compute the weighted FQL critic loss w/ action discriminator."""
+        """Compute the Causal-FQL critic loss."""
         rng, sample_rng = jax.random.split(rng)
         next_actions = self.sample_actions(batch['next_observations'], seed=sample_rng)
         next_actions = jnp.clip(next_actions, -1, 1)
 
-        # Confounding Robust Critic loss.
         next_qs = self.network.select('target_critic')(batch['next_observations'], actions=next_actions)
         if self.config['q_agg'] == 'min':
             next_q = next_qs.min(axis=0)
         else:
             next_q = next_qs.mean(axis=0)
-        
-        # TODO: offline2online, for off data: do this update; for online data, use standard target q
-        # factual_weight = jax.lax.stop_gradient(jax.nn.sigmoid(pos_logits))
-        factual_target_q = batch['rewards'] + self.config['discount'] * batch['masks'] * next_q
-        # ctf_target_q = jnp.quantile(batch['rewards'], self.config['quantile'], method='nearest') \
-            # + self.config['discount'] * jnp.quantile(batch['masks'] * next_q, self.config['quantile'], method='nearest')
-        # target_q = factual_weight * factual_target_q + (1 - factual_weight) * ctf_target_q
-        target_q = factual_target_q
+
+        target_q = batch['rewards'] + self.config['discount'] * batch['masks'] * next_q
         q = self.network.select('critic')(batch['observations'], actions=batch['actions'], params=grad_params)
-        # there are two Q networks in the ensemble, can view them as a batch with the same target
-        critic_mse = jnp.square(q - target_q).mean()
-        critic_loss = critic_mse #+ self.config['disc_coef'] * disc_loss
+        critic_loss = jnp.square(q - target_q).mean()
 
         return critic_loss, {
-            # 'critic_mse': critic_mse,
-            # 'disc_loss': disc_loss,
             'critic_loss': critic_loss,
-            # 'factual_weight_mean': factual_weight.mean(),
-            'factual_target_q_mean': factual_target_q.mean(),
-            # 'ctf_target_q_mean': ctf_target_q.mean(),
-            # 'disc_pos_logit': pos_logits.mean(),
-            # 'disc_neg_logit': neg_logits.mean(),
+            'target_q_mean': target_q.mean(),
             'q_mean': q.mean(),
             'q_max': q.max(),
             'q_min': q.min(),
         }
 
     def actor_loss(self, batch, grad_params, rng):
-        """Compute the FQL actor loss."""
+        """Compute the Causal-FQL actor loss."""
         batch_size, action_dim = batch['actions'].shape
         rng, x_rng, t_rng = jax.random.split(rng, 3)
 
@@ -73,37 +58,32 @@ class Robust_FQLAgent(flax.struct.PyTreeNode):
         pred = self.network.select('actor_bc_flow')(batch['observations'], x_t, t, params=grad_params)
         bc_flow_loss = jnp.mean((pred - vel) ** 2)
 
-        # Action discriminator loss (1 for dataset actions, 0 for policy actions).
+        # Distillation loss + action discriminator loss
+        # (1 for dataset flow actions, 0 for one-step policy actions).
         rng, noise_rng = jax.random.split(rng)
         noises = jax.random.normal(noise_rng, (batch_size, action_dim))
         target_flow_actions = self.compute_flow_actions(batch['observations'], noises=noises)
         actor_actions = self.network.select('actor_onestep_flow')(batch['observations'], noises, params=grad_params)
         distill_loss = jnp.mean((actor_actions - target_flow_actions) ** 2)
-        # Only train discrimintor on actions within the clip range and still different
-        # clipped_actor_actions = jnp.clip(actor_actions, -1, 1)
-        # clipped_flow_actions = jnp.clip(target_flow_actions, -1, 1)
-        # mask = jnp.any(clipped_actor_actions != clipped_flow_actions, axis=-1)
+
         pos_logits = self.network.select('discriminator')(
             batch['observations'], target_flow_actions, return_logits=True, params=grad_params
         )
         neg_logits = self.network.select('discriminator')(
             batch['observations'], jax.lax.stop_gradient(actor_actions), return_logits=True, params=grad_params
         )
-        # if after clipping, actor actions are the same as flow actions, we want disciriminator to take it as positive
-        pos_labels = jnp.ones_like(pos_logits)
-        neg_labels = jnp.zeros_like(neg_logits)# + jnp.logical_not(mask).reshape(neg_logits.shape)
-        pos_loss = optax.sigmoid_binary_cross_entropy(pos_logits, pos_labels)
-        neg_loss = optax.sigmoid_binary_cross_entropy(neg_logits, neg_labels)
+        pos_loss = optax.sigmoid_binary_cross_entropy(pos_logits, jnp.ones_like(pos_logits))
+        neg_loss = optax.sigmoid_binary_cross_entropy(neg_logits, jnp.zeros_like(neg_logits))
         disc_loss = jnp.mean(jnp.concatenate([pos_loss, neg_loss], axis=0))
 
-
-        # Confounding Robust Q loss.
+        # Causal-robust Q loss: blend the mean ensemble Q with a worst-case quantile,
+        # weighted by the discriminator's belief that the one-step action is supported by data.
         actor_actions = jnp.clip(actor_actions, -1, 1)
         qs = self.network.select('critic')(batch['observations'], actions=actor_actions)
         factual_weights = jax.lax.stop_gradient(jax.nn.sigmoid(neg_logits))
         q = jnp.mean(
-            qs * factual_weights + (1 - factual_weights) * jnp.quantile(qs, self.config['quantile'], method='nearest'), 
-            axis=0
+            qs * factual_weights + (1 - factual_weights) * jnp.quantile(qs, self.config['quantile'], method='nearest'),
+            axis=0,
         )
 
         q_loss = -q.mean()
@@ -111,10 +91,8 @@ class Robust_FQLAgent(flax.struct.PyTreeNode):
             lam = jax.lax.stop_gradient(1 / jnp.abs(q).mean())
             q_loss = lam * q_loss
 
-        # Total loss.
         actor_loss = bc_flow_loss + self.config['disc_coef'] * disc_loss + q_loss + self.config['alpha'] * distill_loss
 
-        # Additional metrics for logging.
         actions = self.sample_actions(batch['observations'], seed=rng)
         mse = jnp.mean((actions - batch['actions']) ** 2)
 

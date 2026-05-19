@@ -14,41 +14,36 @@ from utils.networks import ActorVectorField, Value, ActionDiscriminator
 
 
 class Robust_Ensemble_FQLAgent(flax.struct.PyTreeNode):
-    """Confounding Robust Flow Q-learning (Robust-FQL) agent."""
+    """Causal Flow Q-learning (CFQL) agent with a Q-ensemble.
+
+    This is the main variant used in the paper: a configurable Q-ensemble
+    provides a per-(s, a) worst-case Q, which is blended with the mean Q
+    using a discriminator-derived factual weight to form the actor target.
+    """
 
     rng: Any
     network: Any
     config: Any = nonpytree_field()
 
     def critic_loss(self, batch, grad_params, rng):
-        """Compute the weighted FQL critic loss w/ action discriminator."""
+        """Compute the CFQL critic loss (standard Bellman update over the Q-ensemble)."""
         rng, sample_rng = jax.random.split(rng)
         next_actions = self.sample_actions(batch['next_observations'], seed=sample_rng)
         next_actions = jnp.clip(next_actions, -1, 1)
 
-        # Confounding Robust Critic loss.
         next_qs = self.network.select('target_critic')(batch['next_observations'], actions=next_actions)
         if self.config['q_agg'] == 'min':
             next_q = next_qs.min(axis=0)
         else:
             next_q = next_qs.mean(axis=0)
-        
-        factual_target_q = batch['rewards'] + self.config['discount'] * batch['masks'] * next_q
-        target_q = factual_target_q
+
+        target_q = batch['rewards'] + self.config['discount'] * batch['masks'] * next_q
         q = self.network.select('critic')(batch['observations'], actions=batch['actions'], params=grad_params)
-        # there are two Q networks in the ensemble, can view them as a batch with the same target
-        critic_mse = jnp.square(q - target_q).mean()
-        critic_loss = critic_mse #+ self.config['disc_coef'] * disc_loss
+        critic_loss = jnp.square(q - target_q).mean()
 
         return critic_loss, {
-            # 'critic_mse': critic_mse,
-            # 'disc_loss': disc_loss,
             'critic_loss': critic_loss,
-            # 'factual_weight_mean': factual_weight.mean(),
-            'factual_target_q_mean': factual_target_q.mean(),
-            # 'ctf_target_q_mean': ctf_target_q.mean(),
-            # 'disc_pos_logit': pos_logits.mean(),
-            # 'disc_neg_logit': neg_logits.mean(),
+            'target_q_mean': target_q.mean(),
             'q_mean': q.mean(),
             'q_max': q.max(),
             'q_min': q.min(),
@@ -56,7 +51,13 @@ class Robust_Ensemble_FQLAgent(flax.struct.PyTreeNode):
 
     @partial(jax.jit, static_argnames=['online',])
     def actor_loss(self, batch, grad_params, progress, rng, online=False):
-        """Compute the FQL actor loss."""
+        """Compute the CFQL actor loss.
+
+        During the offline phase the actor target is a worst-case Q (per-(s, a)
+        ensemble min) blended with the mean Q via the discriminator-derived
+        factual weight. During online fine-tuning the discriminator and worst-case
+        Q are switched off, reducing to a standard FQL actor update.
+        """
         batch_size, action_dim = batch['actions'].shape
         rng, x_rng, t_rng = jax.random.split(rng, 3)
 
@@ -70,7 +71,7 @@ class Robust_Ensemble_FQLAgent(flax.struct.PyTreeNode):
         pred = self.network.select('actor_bc_flow')(batch['observations'], x_t, t, params=grad_params)
         bc_flow_loss = jnp.mean((pred - vel) ** 2)
 
-        # Action discriminator loss (1 for dataset actions, 0 for policy actions).
+        # Distillation loss.
         rng, noise_rng = jax.random.split(rng)
         noises = jax.random.normal(noise_rng, (batch_size, action_dim))
         target_flow_actions = self.compute_flow_actions(batch['observations'], noises=noises)
@@ -78,28 +79,20 @@ class Robust_Ensemble_FQLAgent(flax.struct.PyTreeNode):
         distill_loss = jnp.mean((actor_actions - target_flow_actions) ** 2)
 
         if not online:
-            # Only train discrimintor on actions within the clip range and still different
-            # clipped_actor_actions = jnp.clip(actor_actions, -1, 1)
-            # clipped_flow_actions = jnp.clip(target_flow_actions, -1, 1)
-            # mask = jnp.any(clipped_actor_actions != clipped_flow_actions, axis=-1)
+            # Action discriminator loss (1 for dataset flow actions, 0 for one-step actions).
             pos_logits = self.network.select('discriminator')(
                 batch['observations'], target_flow_actions, return_logits=True, params=grad_params
             )
             neg_logits = self.network.select('discriminator')(
                 batch['observations'], jax.lax.stop_gradient(actor_actions), return_logits=True, params=grad_params
             )
-            # if after clipping, actor actions are the same as flow actions, we want disciriminator to take it as positive
-            pos_labels = jnp.ones_like(pos_logits)
-            neg_labels = jnp.zeros_like(neg_logits)# + jnp.logical_not(mask).reshape(neg_logits.shape)
-            pos_loss = optax.sigmoid_binary_cross_entropy(pos_logits, pos_labels)
-            neg_loss = optax.sigmoid_binary_cross_entropy(neg_logits, neg_labels)
+            pos_loss = optax.sigmoid_binary_cross_entropy(pos_logits, jnp.ones_like(pos_logits))
+            neg_loss = optax.sigmoid_binary_cross_entropy(neg_logits, jnp.zeros_like(neg_logits))
             disc_loss = jnp.mean(jnp.concatenate([pos_loss, neg_loss], axis=0))
 
-
-        # Confounding Robust Q loss.
+        # Q loss: causal-robust target during offline, standard ensemble mean online.
         actor_actions = jnp.clip(actor_actions, -1, 1)
         qs = self.network.select('critic')(batch['observations'], actions=actor_actions)
-        # Instead of taking the minimum over the batch, we take minimum of the ensembles for each (s, a)
         if online:
             q = jnp.mean(qs, axis=0)
         else:
@@ -111,7 +104,7 @@ class Robust_Ensemble_FQLAgent(flax.struct.PyTreeNode):
             lam = jax.lax.stop_gradient(1 / jnp.abs(q).mean())
             q_loss = lam * q_loss
 
-        # Total loss.
+        # Optionally decay the discriminator coefficient over training.
         if self.config['disc_decay']:
             current_disc_coef = jax.lax.max(1.0, self.config['disc_coef'] * jnp.exp(-2.0 * jax.lax.min(progress, 1.0)))
         else:
@@ -122,7 +115,6 @@ class Robust_Ensemble_FQLAgent(flax.struct.PyTreeNode):
         else:
             actor_loss = bc_flow_loss + current_disc_coef * disc_loss + q_loss + self.config['alpha'] * distill_loss
 
-        # Additional metrics for logging.
         actions = self.sample_actions(batch['observations'], seed=rng)
         mse = jnp.mean((actions - batch['actions']) ** 2)
         info = {
@@ -137,7 +129,6 @@ class Robust_Ensemble_FQLAgent(flax.struct.PyTreeNode):
             info['disc_loss'] = disc_loss
             info['disc_coef'] = current_disc_coef
             info['factual_weight_mean'] = factual_weights.mean()
-            
 
         return actor_loss, info
 
