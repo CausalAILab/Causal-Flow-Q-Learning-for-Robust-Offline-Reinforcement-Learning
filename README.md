@@ -109,7 +109,7 @@ python main.py --env_name=... --agent=agents/rebrac.py ...
 python main.py --env_name=... --agent=agents/ifql.py   ...
 ```
 
-### Confounder modes
+### Confounder modes for V-D4DL
 
 `--confound_mode` injects an observation-space confounder by zeroing a fixed
 region of every (64×64) pixel observation:
